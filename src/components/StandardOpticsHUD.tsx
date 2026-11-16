@@ -96,7 +96,7 @@ export const StandardOpticsHUD: React.FC = () => {
         ctx.strokeRect(40, 40, 320, 220);
         ctx.fillStyle = '#00f0ff';
         ctx.font = '16px monospace';
-        ctx.fillText('SURYA OPTICS CALIBRATION TARGET', 60, 150);
+        ctx.fillText('BUDDY OPTICS CALIBRATION TARGET', 60, 150);
         base64Image = canvas.toDataURL('image/jpeg', 0.85);
       }
     }
@@ -104,7 +104,7 @@ export const StandardOpticsHUD: React.FC = () => {
     try {
       const res = await apiService.analyzeOpticalScene(
         base64Image,
-        'Analyze this view through SURYA Standard Optics HUD. Identify items, assess distance benignly, and generate clean structured telemetry.'
+        'Analyze this view through BUDDY Standard Optics HUD. Identify items, assess distance benignly, and generate clean structured telemetry.'
       );
       setTelemetryResult(res.telemetry);
       soundFx.playAuthorize();

@@ -113,6 +113,9 @@ class WakeWordService {
     if (!text) return;
 
     const strictMatch =
+      text.includes('hey buddy') ||
+      text.includes('hi buddy') ||
+      text.includes('buddy ai') ||
       text.includes('hey surya') ||
       text.includes('hi surya') ||
       text.includes('हे सूर्य') ||
@@ -122,18 +125,30 @@ class WakeWordService {
 
     const relaxedMatch =
       this.sensitivity >= 0.7 &&
-      (text.includes('ok surya') || text.includes('hello surya') || text.endsWith('surya'));
+      (text.includes('ok buddy') ||
+        text.includes('hello buddy') ||
+        text.endsWith('buddy') ||
+        text.includes('ok surya') ||
+        text.includes('hello surya') ||
+        text.endsWith('surya'));
 
-    const highSensitivityMatch = this.sensitivity >= 0.85 && text.includes('surya');
+    const highSensitivityMatch =
+      this.sensitivity >= 0.85 && (text.includes('buddy') || text.includes('surya'));
 
     if ((strictMatch || relaxedMatch || highSensitivityMatch) && this.onWakeWordCallback) {
-      const match = text.includes('hey surya')
+      const match = text.includes('hey buddy')
+        ? 'Hey BUDDY'
+        : text.includes('hi buddy')
+        ? 'Hi BUDDY'
+        : text.includes('buddy')
+        ? 'BUDDY'
+        : text.includes('hey surya')
         ? 'Hey SURYA'
         : text.includes('hi surya')
         ? 'Hi SURYA'
         : text.includes('हे सूर्य')
         ? 'हे सूर्या'
-        : 'SURYA';
+        : 'BUDDY';
 
       this.detectedWord = match;
       this.notify();
@@ -241,7 +256,7 @@ class WakeWordService {
   }
 
   public getBackgroundLimitationNote(): string {
-    return 'Android restricts third-party apps from true screen-off DSP hotword wake-up reserved for OS-level assistants. When Hands-Free is enabled, SURYA displays a visible foreground notification and responds while active or in foreground without silent recording.';
+    return 'Android restricts third-party apps from true screen-off DSP hotword wake-up reserved for OS-level assistants. When Hands-Free is enabled, BUDDY displays a visible foreground notification and responds while active or in foreground without silent recording.';
   }
 
   public getState(): WakeWordState {

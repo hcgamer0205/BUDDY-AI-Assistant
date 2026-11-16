@@ -107,14 +107,14 @@ export const ThemeCustomizerModal: React.FC<ThemeCustomizerModalProps> = ({ onCl
       aria-label="UI Theme Customizer"
       className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-slate-950/85 backdrop-blur-md animate-in fade-in"
     >
-      <div className="w-full max-w-xl max-h-[90vh] flex flex-col bg-slate-900 border border-amber-500/40 rounded-2xl shadow-2xl overflow-hidden font-sans">
+      <div className="w-full max-w-xl max-h-[90vh] flex flex-col bg-slate-900 border border-emerald-500/30 rounded-2xl shadow-2xl overflow-hidden font-sans">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 bg-slate-950/80 border-b border-slate-800">
+        <div className="flex items-center justify-between px-4 py-3 bg-[#070d14]/90 border-b border-emerald-500/20">
           <div className="flex items-center gap-2">
-            <Palette className="w-5 h-5 text-amber-400" />
+            <Palette className="w-5 h-5 text-emerald-400" />
             <div>
-              <h2 className="text-sm font-mono font-bold text-amber-300 tracking-wider uppercase">
-                SURYA UI THEME STUDIO
+              <h2 className="text-sm font-mono font-bold text-emerald-300 tracking-wider uppercase">
+                BUDDY UI THEME STUDIO
               </h2>
               <p className="text-[10px] text-slate-400">Dynamic theme engine & voice-controlled customization</p>
             </div>
@@ -505,8 +505,8 @@ export const ThemeCustomizerModal: React.FC<ThemeCustomizerModalProps> = ({ onCl
                 value={importJsonText}
                 onChange={(e) => setImportJsonText(e.target.value)}
                 rows={4}
-                placeholder="Paste exported SURYA theme JSON here..."
-                className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-amber-400"
+                placeholder="Paste exported BUDDY theme JSON here..."
+                className="w-full p-2.5 rounded-xl bg-slate-900 border border-emerald-500/30 font-mono text-[11px] text-slate-200 focus:outline-none focus:border-emerald-400"
               />
               <div className="flex justify-end gap-2">
                 <button

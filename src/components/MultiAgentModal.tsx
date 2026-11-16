@@ -236,7 +236,7 @@ export const MultiAgentModal: React.FC<MultiAgentModalProps> = ({ onClose }) => 
             </div>
           ) : (
             <div className="p-8 text-center text-slate-400 text-xs font-mono">
-              Submit an objective above to orchestrate SURYA&apos;s 10 specialized agents.
+              Submit an objective above to orchestrate BUDDY&apos;s 10 specialized agents.
             </div>
           )}
 

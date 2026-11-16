@@ -217,7 +217,16 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
-const PRIMARY_UPSTREAM_TIMEOUT_MS = 12000;
+const PRIMARY_UPSTREAM_TIMEOUT_MS = 30000;
+
+function resolveGeminiModelName(model: string): string {
+  if (!model) return 'gemini-2.5-flash';
+  const lower = model.toLowerCase();
+  if (lower.includes('argon') || lower.includes('pro')) {
+    return 'gemini-2.5-pro';
+  }
+  return 'gemini-2.5-flash';
+}
 
 function withUpstreamTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -263,19 +272,22 @@ export async function generateWithFallback(
   params: { model: string; contents: any; config?: any },
   fallbackModel = 'gemini-3.1-flash-lite'
 ) {
+  const resolvedModel = resolveGeminiModelName(params.model);
+  const resolvedFallback = resolveGeminiModelName(fallbackModel);
+  const actualParams = { ...params, model: resolvedModel };
   try {
-    if (params.model !== fallbackModel) {
+    if (resolvedModel !== resolvedFallback) {
       return await withUpstreamTimeout(
-        ai.models.generateContent(params),
+        ai.models.generateContent(actualParams),
         PRIMARY_UPSTREAM_TIMEOUT_MS,
         `Model ${params.model}`
       );
     }
-    return await ai.models.generateContent(params);
+    return await ai.models.generateContent(actualParams);
   } catch (err: any) {
-    if (shouldFallbackToLite(err) && params.model !== fallbackModel) {
+    if (shouldFallbackToLite(err) && resolvedModel !== resolvedFallback) {
       console.warn(`[SURYA Gemini] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
-      return await ai.models.generateContent({ ...params, model: fallbackModel });
+      return await ai.models.generateContent({ ...actualParams, model: resolvedFallback });
     }
     throw err;
   }
@@ -286,20 +298,23 @@ async function generateWithFallbackMeta(
   params: { model: string; contents: any; config?: any },
   fallbackModel = 'gemini-3.1-flash-lite'
 ): Promise<{ response: any; modelUsed: string; fellBack: boolean }> {
+  const resolvedModel = resolveGeminiModelName(params.model);
+  const resolvedFallback = resolveGeminiModelName(fallbackModel);
+  const actualParams = { ...params, model: resolvedModel };
   try {
     const response =
-      params.model !== fallbackModel
+      resolvedModel !== resolvedFallback
         ? await withUpstreamTimeout(
-            ai.models.generateContent(params),
+            ai.models.generateContent(actualParams),
             PRIMARY_UPSTREAM_TIMEOUT_MS,
             `Model ${params.model}`
           )
-        : await ai.models.generateContent(params);
+        : await ai.models.generateContent(actualParams);
     return { response, modelUsed: params.model, fellBack: false };
   } catch (err: any) {
-    if (shouldFallbackToLite(err) && params.model !== fallbackModel) {
+    if (shouldFallbackToLite(err) && resolvedModel !== resolvedFallback) {
       console.warn(`[SURYA Gemini] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
-      const response = await ai.models.generateContent({ ...params, model: fallbackModel });
+      const response = await ai.models.generateContent({ ...actualParams, model: resolvedFallback });
       return { response, modelUsed: fallbackModel, fellBack: true };
     }
     throw err;
@@ -860,8 +875,9 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
   // Function to stream from a given model
   const streamFromModel = async (targetModel: string): Promise<boolean> => {
     try {
+      const resolvedTarget = resolveGeminiModelName(targetModel);
       const streamInitPromise = ai.models.generateContentStream({
-        model: targetModel,
+        model: resolvedTarget,
         contents,
         config: {
           systemInstruction,
@@ -1012,7 +1028,7 @@ app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
       responseText = meta.response?.text || '';
     } else {
       const response = await ai.models.generateContent({
-        model: activeModel,
+        model: resolveGeminiModelName(activeModel),
         contents,
         config: { systemInstruction },
       });

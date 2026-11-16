@@ -506,8 +506,8 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
             type={showToken ? 'text' : 'password'}
             value={apiTokenInput}
             onChange={(e) => setApiTokenInput(e.target.value)}
-            placeholder="SURYA_API_TOKEN"
-            className="w-full min-h-[42px] px-3 py-2 bg-[#0b0f17] border border-slate-800 rounded-xl text-xs font-mono text-slate-100 placeholder-slate-600 focus:outline-none focus:border-[#60a5fa]"
+            placeholder="BUDDY_API_TOKEN"
+            className="w-full min-h-[42px] px-3 py-2 bg-[#0b0f17] border border-slate-800 rounded-xl text-xs font-mono text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-400"
           />
         </div>
 
@@ -616,7 +616,7 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
               Hands-Free Wake Word
             </span>
             <span className="text-xs text-slate-400">
-              Listen for &ldquo;Hey SURYA&rdquo; with active mic indicator
+              Listen for &ldquo;Hey BUDDY&rdquo; with active mic indicator
             </span>
           </div>
           <button
@@ -787,7 +787,7 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
           </div>
         ) : (
           <p className="text-xs text-slate-400">
-            Connect to a verified SURYA backend to inspect live security status.
+            Connect to a verified BUDDY backend to inspect live security status.
           </p>
         )}
       </SectionShell>
@@ -885,7 +885,7 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
           <div>
             <span className="text-xs font-medium text-slate-100 block">Personal Memory</span>
             <span className="text-xs text-slate-400">
-              Allow SURYA to recall user-approved facts and preferences
+              Allow BUDDY to recall user-approved facts and preferences
             </span>
           </div>
           <button

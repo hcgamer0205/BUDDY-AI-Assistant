@@ -62,6 +62,10 @@ export interface SuryaThemeConfig {
 }
 
 export type VoiceProfileId =
+  | 'jarvis-male'
+  | 'stark-male'
+  | 'atlas-male'
+  | 'neutral-voice'
   | 'suryadev-radiant'
   | 'calm-intelligence'
   | 'futuristic-ai'
@@ -79,6 +83,7 @@ export interface VoiceProfile {
   preferredLang: string;     // Default locale code
   timbreDescription: string;
   samplePhrase: string;
+  gender: 'male' | 'female' | 'neutral';
 }
 
 export interface VoiceSettings {
@@ -89,4 +94,5 @@ export interface VoiceSettings {
   wakeWordEnabled: boolean;
   sensitivity: number;       // 0.1 to 1.0
   autoStopSpeakingOnInterrupt: boolean;
+  selectedVoiceURI?: string; // Specific Android/Web voice URI or identifier
 }

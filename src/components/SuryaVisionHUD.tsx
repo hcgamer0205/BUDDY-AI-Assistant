@@ -397,11 +397,11 @@ export const SuryaVisionHUD: React.FC = () => {
       <canvas ref={canvasRef} className="hidden" />
       <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
 
-      {/* Clean Header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
+      {/* Clean Glassmorphic Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-emerald-500/20 select-none">
         <div>
-          <h2 className="text-lg font-semibold text-slate-100">Vision</h2>
-          <p className="text-xs text-slate-400">
+          <h2 className="text-lg font-bold text-white tracking-wide">BUDDY Vision HUD</h2>
+          <p className="text-xs text-emerald-300/80 font-medium">
             Scene analysis, text recognition, translation, and QR scanning
           </p>
         </div>
@@ -409,17 +409,17 @@ export const SuryaVisionHUD: React.FC = () => {
           <button
             type="button"
             onClick={() => (streamActive ? stopCamera() : startCamera())}
-            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-[#121826] border border-slate-800 hover:border-slate-700 text-xs font-medium text-slate-200 flex items-center gap-1.5"
+            className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-[#0b1522]/80 backdrop-blur-md border border-teal-500/30 hover:border-teal-400 text-xs font-semibold text-teal-200 flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
           >
-            <Camera className="w-3.5 h-3.5 text-[#60a5fa]" />
+            <Camera className="w-3.5 h-3.5 text-teal-400" />
             <span>{streamActive ? 'Stop Camera' : 'Camera'}</span>
           </button>
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-[#121826] border border-slate-800 hover:border-slate-700 text-xs font-medium text-slate-200 flex items-center gap-1.5"
+            className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-[#0b1522]/80 backdrop-blur-md border border-emerald-500/30 hover:border-emerald-400 text-xs font-semibold text-emerald-200 flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
           >
-            <Upload className="w-3.5 h-3.5 text-[#d4a84f]" />
+            <Upload className="w-3.5 h-3.5 text-emerald-400" />
             <span>Upload Image</span>
           </button>
         </div>
@@ -437,10 +437,10 @@ export const SuryaVisionHUD: React.FC = () => {
                 type="button"
                 onClick={() => handleAnalyze(m.id)}
                 disabled={isAnalyzing}
-                className={`min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-medium border flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                className={`min-h-[38px] px-3.5 py-1.5 rounded-xl text-xs font-semibold border flex items-center gap-1.5 whitespace-nowrap transition-all cursor-pointer ${
                   active
-                    ? 'bg-[#60a5fa] text-slate-950 border-[#60a5fa]'
-                    : 'bg-[#121826] text-slate-300 border-slate-800 hover:border-slate-700'
+                    ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                    : 'bg-[#0b1522]/80 text-slate-300 border-emerald-500/20 hover:border-emerald-400/50'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
@@ -623,9 +623,9 @@ export const SuryaVisionHUD: React.FC = () => {
       {/* Visual Q&A */}
       <div className="space-y-2.5">
         {qaThread.map((item, idx) => (
-          <div key={idx} className="p-3 rounded-xl bg-[#121826] border border-slate-800 text-xs space-y-1">
-            <div className="font-medium text-[#60a5fa]">You: {item.q}</div>
-            <div className="text-slate-200 leading-relaxed">SURYA: {item.a}</div>
+          <div key={idx} className="p-3.5 rounded-2xl bg-[#0b1522]/85 backdrop-blur-xl border border-emerald-500/20 text-xs space-y-1 shadow-md">
+            <div className="font-semibold text-teal-300">You: {item.q}</div>
+            <div className="text-slate-100 leading-relaxed"><span className="text-emerald-400 font-semibold">BUDDY:</span> {item.a}</div>
           </div>
         ))}
 
@@ -634,10 +634,10 @@ export const SuryaVisionHUD: React.FC = () => {
             type="button"
             onClick={handleVoiceVisionQuestion}
             aria-label="Ask visual question by voice"
-            className={`min-h-[44px] min-w-[44px] rounded-xl border flex items-center justify-center ${
+            className={`min-h-[44px] min-w-[44px] rounded-xl border flex items-center justify-center transition-all cursor-pointer ${
               voiceListening
-                ? 'bg-[#60a5fa] text-slate-950 border-[#60a5fa]'
-                : 'bg-[#121826] text-slate-300 border-slate-800 hover:border-slate-700'
+                ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                : 'bg-[#0b1522]/80 text-emerald-300 border-emerald-500/25 hover:border-emerald-400/50 shadow-sm'
             }`}
           >
             <Mic className="w-4 h-4" />
@@ -646,14 +646,14 @@ export const SuryaVisionHUD: React.FC = () => {
             type="text"
             value={questionInput}
             onChange={(e) => setQuestionInput(e.target.value)}
-            placeholder="Ask about this image or camera view..."
-            className="flex-1 min-h-[44px] px-3.5 rounded-xl bg-[#121826] border border-slate-800 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#60a5fa]"
+            placeholder="Ask BUDDY about this image or camera view..."
+            className="flex-1 min-h-[44px] px-4 rounded-xl bg-[#0b1522]/85 border border-emerald-500/25 text-xs text-slate-100 placeholder-slate-400 focus:outline-none focus:border-emerald-400/80 shadow-inner"
           />
           <button
             type="submit"
             disabled={!questionInput.trim() || isAskingVision}
             aria-label="Send visual question"
-            className="min-h-[44px] min-w-[44px] px-4 rounded-xl bg-[#60a5fa] disabled:opacity-40 text-slate-950 flex items-center justify-center"
+            className="min-h-[44px] min-w-[44px] px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-slate-950 font-semibold flex items-center justify-center shadow-[0_0_14px_rgba(16,185,129,0.35)] cursor-pointer transition-all"
           >
             {isAskingVision ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>

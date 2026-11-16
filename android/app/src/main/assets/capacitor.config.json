@@ -1,0 +1,22 @@
+{
+	"appId": "com.surya.assistant",
+	"appName": "SURYA AI",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": true
+	},
+	"android": {
+		"allowMixedContent": true,
+		"captureInput": true,
+		"webContentsDebuggingEnabled": true
+	},
+	"plugins": {
+		"CapacitorCookies": {
+			"enabled": false
+		},
+		"CapacitorHttp": {
+			"enabled": false
+		}
+	}
+}

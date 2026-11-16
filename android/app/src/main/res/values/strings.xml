@@ -1,13 +1,13 @@
 <resources>
-    <string name="app_name">SURYA AI</string>
-    <string name="title_activity_main">SURYA AI</string>
+    <string name="app_name">BUDDY AI</string>
+    <string name="title_activity_main">BUDDY AI</string>
     <string name="package_name">com.surya.assistant</string>
     <string name="custom_url_scheme">surya</string>
-    <string name="widget_label">SURYA Command Widget</string>
+    <string name="widget_label">BUDDY Command Widget</string>
     <string name="shortcut_voice_short">Voice Mode</string>
-    <string name="shortcut_voice_long">Start SURYA Hands-Free Voice</string>
-    <string name="shortcut_vision_short">SURYA Vision</string>
-    <string name="shortcut_vision_long">Open SURYA Optics Camera</string>
+    <string name="shortcut_voice_long">Start BUDDY Hands-Free Voice</string>
+    <string name="shortcut_vision_short">BUDDY Vision</string>
+    <string name="shortcut_vision_long">Open BUDDY Optics Camera</string>
     <string name="shortcut_tasks_short">Agenda</string>
-    <string name="shortcut_tasks_long">Open SURYA Tasks &amp; Agenda</string>
+    <string name="shortcut_tasks_long">Open BUDDY Tasks &amp; Agenda</string>
 </resources>

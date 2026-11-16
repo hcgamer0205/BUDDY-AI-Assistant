@@ -24,6 +24,7 @@ import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.speech.tts.Voice;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import androidx.annotation.NonNull;
@@ -38,7 +39,9 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.Executor;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
@@ -344,6 +347,204 @@ public class MainActivity extends BridgeActivity {
                 return result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED;
             } catch (Exception e) {
                 return false;
+            }
+        }
+
+        @JavascriptInterface
+        public String getAvailableTtsVoices() {
+            if (tts == null) return "[]";
+            try {
+                Set<Voice> voices = tts.getVoices();
+                if (voices == null || voices.isEmpty()) return "[]";
+                JSONArray arr = new JSONArray();
+                for (Voice v : voices) {
+                    JSONObject obj = new JSONObject();
+                    obj.put("id", v.getName());
+                    obj.put("name", v.getName());
+                    Locale loc = v.getLocale();
+                    if (loc != null) {
+                        obj.put("locale", loc.toLanguageTag());
+                        obj.put("language", loc.getLanguage());
+                        obj.put("country", loc.getCountry());
+                        obj.put("displayName", loc.getDisplayName());
+                    } else {
+                        obj.put("locale", "unknown");
+                    }
+                    obj.put("quality", v.getQuality());
+                    obj.put("latency", v.getLatency());
+                    obj.put("isNetwork", v.isNetworkConnectionRequired());
+
+                    // Accurately determine gender without female/male substring collisions
+                    String lowerName = v.getName().toLowerCase(Locale.ROOT);
+                    Set<String> features = v.getFeatures();
+                    String gender = "unverified";
+                    if (features != null) {
+                        for (String f : features) {
+                            String lf = f.toLowerCase(Locale.ROOT);
+                            if (lf.contains("gender=male") || lf.equals("male")) {
+                                gender = "male";
+                                break;
+                            } else if (lf.contains("gender=female") || lf.equals("female")) {
+                                gender = "female";
+                                break;
+                            }
+                        }
+                    }
+                    if ("unverified".equals(gender)) {
+                        // Check female FIRST to avoid "female".contains("male") false positive
+                        if (lowerName.contains("female") || lowerName.contains("#female") || lowerName.contains("-female")
+                                || lowerName.contains("_female") || lowerName.contains("_f_") || lowerName.contains("female_")) {
+                            gender = "female";
+                        } else if (lowerName.contains("#male") || lowerName.contains("-male") || lowerName.contains("_male")
+                                || lowerName.contains("male_") || lowerName.contains("male1") || lowerName.contains("male2") || lowerName.contains("male3")
+                                || lowerName.matches(".*(?:^|[^a-z])male(?:[^a-z]|$).*")
+                                || lowerName.contains("sfg#male") || lowerName.contains("rjs#male") || lowerName.contains("iob#male")
+                                || lowerName.contains("cxx#male") || lowerName.contains("cfc#male") || lowerName.contains("hie#male") || lowerName.contains("hid#male")
+                                || lowerName.contains("m01") || lowerName.contains("m02") || lowerName.contains("m03")
+                                || lowerName.contains("david") || lowerName.contains("george") || lowerName.contains("mark") || lowerName.contains("daniel")
+                                || lowerName.contains("ravi") || lowerName.contains("pradeep") || lowerName.contains("mohan") || lowerName.contains("amit")) {
+                            gender = "male";
+                        }
+                    }
+                    obj.put("gender", gender);
+                    arr.put(obj);
+                }
+                return arr.toString();
+            } catch (Exception e) {
+                return "[]";
+            }
+        }
+
+        @JavascriptInterface
+        public String getTtsEngines() {
+            if (tts == null) return "{\"engines\":[],\"defaultEngine\":\"\"}";
+            try {
+                JSONObject res = new JSONObject();
+                JSONArray arr = new JSONArray();
+                List<TextToSpeech.EngineInfo> engines = tts.getEngines();
+                if (engines != null) {
+                    for (TextToSpeech.EngineInfo ei : engines) {
+                        JSONObject eo = new JSONObject();
+                        eo.put("name", ei.name);
+                        eo.put("label", ei.label);
+                        arr.put(eo);
+                    }
+                }
+                res.put("engines", arr);
+                res.put("defaultEngine", tts.getDefaultEngine() != null ? tts.getDefaultEngine() : "");
+                return res.toString();
+            } catch (Exception e) {
+                return "{\"engines\":[],\"defaultEngine\":\"\"}";
+            }
+        }
+
+        @JavascriptInterface
+        public boolean setVoiceById(String voiceId) {
+            if (tts == null || voiceId == null || voiceId.trim().isEmpty()) return false;
+            try {
+                Set<Voice> voices = tts.getVoices();
+                if (voices != null) {
+                    for (Voice v : voices) {
+                        if (v.getName().equalsIgnoreCase(voiceId.trim())) {
+                            tts.setVoice(v);
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean setPitchAndRate(float pitch, float rate) {
+            if (tts == null) return false;
+            try {
+                tts.setPitch(Math.max(0.5f, Math.min(2.0f, pitch)));
+                tts.setSpeechRate(Math.max(0.5f, Math.min(2.0f, rate)));
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean hasMaleVoice(String langCode) {
+            if (tts == null) return false;
+            try {
+                Set<Voice> voices = tts.getVoices();
+                if (voices == null) return false;
+                String targetPrefix = (langCode != null && !langCode.isEmpty()) ? langCode.substring(0, 2).toLowerCase(Locale.ROOT) : "";
+                for (Voice v : voices) {
+                    Locale loc = v.getLocale();
+                    if (loc != null && !targetPrefix.isEmpty() && !loc.getLanguage().toLowerCase(Locale.ROOT).startsWith(targetPrefix)) {
+                        continue;
+                    }
+                    String lowerName = v.getName().toLowerCase(Locale.ROOT);
+                    if (lowerName.contains("female")) continue;
+                    if (lowerName.contains("male") || lowerName.contains("#male") || lowerName.contains("-male") || lowerName.contains("_male")
+                            || lowerName.contains("sfg#male") || lowerName.contains("rjs#male") || lowerName.contains("iob#male")
+                            || lowerName.contains("cxx#male") || lowerName.contains("cfc#male") || lowerName.contains("hie#male") || lowerName.contains("hid#male")
+                            || lowerName.contains("m01") || lowerName.contains("david") || lowerName.contains("george")) {
+                        return true;
+                    }
+                }
+                return false;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public void speakTextWithConfig(String text, String voiceId, float pitch, float rate, String langCode) {
+            mainHandler.post(() -> {
+                if (tts == null || text == null || text.trim().isEmpty()) return;
+                try {
+                    if (langCode != null && !langCode.trim().isEmpty()) {
+                        tts.setLanguage(Locale.forLanguageTag(langCode.trim()));
+                    }
+                    if (pitch > 0) {
+                        tts.setPitch(Math.max(0.5f, Math.min(2.0f, pitch)));
+                    }
+                    if (rate > 0) {
+                        tts.setSpeechRate(Math.max(0.5f, Math.min(2.0f, rate)));
+                    }
+                    if (voiceId != null && !voiceId.trim().isEmpty()) {
+                        Set<Voice> voices = tts.getVoices();
+                        if (voices != null) {
+                            for (Voice v : voices) {
+                                if (v.getName().equalsIgnoreCase(voiceId.trim())) {
+                                    tts.setVoice(v);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "surya_tts_" + System.currentTimeMillis());
+                } catch (Exception e) {
+                    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "surya_tts_" + System.currentTimeMillis());
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public boolean openTtsSettings() {
+            try {
+                Intent intent = new Intent();
+                intent.setAction("com.android.settings.TTS_SETTINGS");
+                intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+                return true;
+            } catch (Exception e) {
+                try {
+                    Intent installIntent = new Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA);
+                    installIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(installIntent);
+                    return true;
+                } catch (Exception e2) {
+                    return false;
+                }
             }
         }
 

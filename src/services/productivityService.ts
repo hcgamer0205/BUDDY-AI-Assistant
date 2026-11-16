@@ -136,7 +136,7 @@ class ProductivityService {
         this.tasks = [
           {
             id: 'task_1',
-            title: 'Verify SURYA Voice & Native Intent Dispatch',
+            title: 'Verify BUDDY Voice & Native Intent Dispatch',
             description: 'Ensure local app launches bypass Gemini with zero latency.',
             priority: 'HIGH',
             status: 'completed',
@@ -175,7 +175,7 @@ class ProductivityService {
         this.notes = [
           {
             id: 'note_1',
-            title: 'SURYA Architectural Principles',
+            title: 'BUDDY Architectural Principles',
             content:
               '1. Local deterministic execution for Android actions.\n2. Suryadev majestic resonant voice.\n3. Universal UI customization via natural voice.\n4. Zero silent recordings, privacy by design.',
             tags: ['Architecture', 'Core'],
@@ -223,7 +223,7 @@ class ProductivityService {
             title: 'Android Mobile Verification Session',
             startTime: '02:00 PM',
             endTime: '03:00 PM',
-            location: 'SURYA Studio Lab',
+            location: 'BUDDY Studio Lab',
             category: 'Engineering',
           },
         ];
@@ -237,7 +237,7 @@ class ProductivityService {
         this.projects = [
           {
             id: 'proj_1',
-            title: 'SURYA Stark Operating Environment',
+            title: 'BUDDY Operating Environment',
             description: 'Unified voice-first personal AI ecosystem for Android with optics, multi-agent reasoning, and studio.',
             progressPercent: 92,
             status: 'active',
@@ -280,7 +280,7 @@ class ProductivityService {
             actions: [
               { type: 'show_tasks', target: 'High priority agenda & tasks' },
               { type: 'send_notification', target: 'Morning Command Briefing Ready' },
-              { type: 'speak_greeting', target: 'Good morning. All SURYA subsystems are operational.' },
+              { type: 'speak_greeting', target: 'Good morning. All BUDDY subsystems are operational.' },
             ],
             requiresApproval: false,
             isEnabled: true,
@@ -428,7 +428,7 @@ class ProductivityService {
       if (!rem.isTriggered && rem.dueTime === hhmm) {
         rem.isTriggered = true;
         fired.push({ ...rem });
-        deviceBridgeService.sendNotification('SURYA Reminder', rem.title);
+        deviceBridgeService.sendNotification('BUDDY Reminder', rem.title);
       }
     }
     if (fired.length > 0) {

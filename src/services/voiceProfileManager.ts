@@ -1,8 +1,8 @@
 /**
  * SURYA Voice Profile Manager
- * Powers the "Suryadev — Radiant Command" voice identity and multilingual voice system.
- * Inspired by the majestic, resonant, powerful qualities of Suryadev in Indian mythology.
- * Handles language-specific voices, speech rate, pitch controls, and hardware limitations.
+ * Powers male and female voice systems (JARVIS, STARK, ATLAS, NEUTRAL, Suryadev, etc.)
+ * and multilingual voice system.
+ * Handles language-specific voices, speech rate, pitch controls, voice URIs, and hardware limitations.
  */
 
 import { VoiceProfile, VoiceProfileId, VoiceSettings } from '../types/suryaTheme';
@@ -10,6 +10,54 @@ import { VoiceProfile, VoiceProfileId, VoiceSettings } from '../types/suryaTheme
 const VOICE_SETTINGS_STORAGE_KEY = 'surya_voice_settings_v2';
 
 export const VOICE_PROFILES: Record<VoiceProfileId, VoiceProfile> = {
+  'jarvis-male': {
+    id: 'jarvis-male',
+    name: 'JARVIS',
+    title: 'Sophisticated & Calm Male Assistant',
+    description: 'Deep, measured, British-inspired intelligent assistant voice for elite operations.',
+    pitch: 0.90,
+    rate: 1.0,
+    preferredLang: 'en-US',
+    timbreDescription: 'Deep Sophisticated Baritone',
+    samplePhrase: 'Good day. All system diagnostics and neural links are operating at peak efficiency.',
+    gender: 'male',
+  },
+  'stark-male': {
+    id: 'stark-male',
+    name: 'STARK',
+    title: 'Confident & Articulate Male Voice',
+    description: 'Sharp, confident, natural tactical voice tuned for rapid interaction and readiness.',
+    pitch: 0.96,
+    rate: 1.05,
+    preferredLang: 'en-US',
+    timbreDescription: 'Confident Articulate Tenor',
+    samplePhrase: 'Systems are fully locked in. Let us get to work.',
+    gender: 'male',
+  },
+  'atlas-male': {
+    id: 'atlas-male',
+    name: 'ATLAS',
+    title: 'Deep & Steady Male Voice',
+    description: 'Deep, steady, authoritative masculine presence for robust command operations.',
+    pitch: 0.88,
+    rate: 0.95,
+    preferredLang: 'en-US',
+    timbreDescription: 'Deep Steady Resonance',
+    samplePhrase: 'Atlas operational telemetry verified. Standing by for instructions.',
+    gender: 'male',
+  },
+  'neutral-voice': {
+    id: 'neutral-voice',
+    name: 'NEUTRAL',
+    title: 'Balanced Universal Voice',
+    description: 'Clean, balanced, neutral articulation suitable for any operational environment.',
+    pitch: 1.0,
+    rate: 1.0,
+    preferredLang: 'en-US',
+    timbreDescription: 'Balanced Neutral Articulation',
+    samplePhrase: 'SURYA intelligence environment is active and ready.',
+    gender: 'neutral',
+  },
   'suryadev-radiant': {
     id: 'suryadev-radiant',
     name: 'Suryadev — Radiant Command',
@@ -20,6 +68,7 @@ export const VOICE_PROFILES: Record<VoiceProfileId, VoiceProfile> = {
     preferredLang: 'en-IN',
     timbreDescription: 'Resonant Baritone / Neural Command',
     samplePhrase: 'I am SURYA. Radiance and intelligence are online to serve you.',
+    gender: 'female',
   },
   'calm-intelligence': {
     id: 'calm-intelligence',
@@ -31,6 +80,7 @@ export const VOICE_PROFILES: Record<VoiceProfileId, VoiceProfile> = {
     preferredLang: 'en-US',
     timbreDescription: 'Smooth Neutral / Measured Pace',
     samplePhrase: 'Analyzing telemetry. All parameters are within optimal operational boundaries.',
+    gender: 'female',
   },
   'futuristic-ai': {
     id: 'futuristic-ai',
@@ -42,6 +92,7 @@ export const VOICE_PROFILES: Record<VoiceProfileId, VoiceProfile> = {
     preferredLang: 'en-US',
     timbreDescription: 'Synthesized Clarity / Rapid Articulation',
     samplePhrase: 'SURYA neural subsystems synchronized. Tactical diagnostics ready.',
+    gender: 'female',
   },
   'natural-conversational': {
     id: 'natural-conversational',
@@ -53,6 +104,7 @@ export const VOICE_PROFILES: Record<VoiceProfileId, VoiceProfile> = {
     preferredLang: 'en-US',
     timbreDescription: 'Warm Natural / Expressive Cadence',
     samplePhrase: 'Hello! I am right here. What would you like to accomplish today?',
+    gender: 'female',
   },
   'indian-english': {
     id: 'indian-english',
@@ -64,6 +116,7 @@ export const VOICE_PROFILES: Record<VoiceProfileId, VoiceProfile> = {
     preferredLang: 'en-IN',
     timbreDescription: 'Indian English Neural / Subcontinental Rhythm',
     samplePhrase: 'SURYA online. All local Android intents and services are standing by.',
+    gender: 'female',
   },
   'hindi-command': {
     id: 'hindi-command',
@@ -75,6 +128,7 @@ export const VOICE_PROFILES: Record<VoiceProfileId, VoiceProfile> = {
     preferredLang: 'hi-IN',
     timbreDescription: 'Authoritative Hindi / Devanagari Neural',
     samplePhrase: 'नमस्ते! मैं सूर्या हूँ। आपकी हर आज्ञा का पालन करने के लिए तैयार हूँ।',
+    gender: 'female',
   },
 };
 
@@ -89,7 +143,7 @@ export const SUPPORTED_LANGUAGES = [
   { code: 'kn-IN', name: 'Kannada (ಕನ್ನಡ)', script: 'Kannada', nativeSample: 'ನಮಸ್ಕಾರ, ನಾನು ಸೂರ್ಯ.' },
   { code: 'ml-IN', name: 'Malayalam (മലയാളം)', script: 'Malayalam', nativeSample: 'നമസ്കാരം, ഞാൻ സൂര്യ.' },
   { code: 'bn-IN', name: 'Bengali (বাংলা)', script: 'Bengali', nativeSample: 'নমস্কার, আমি সূর্য।' },
-  { code: 'gu-IN', name: 'Gujarati (ગુજરાતી)', script: 'Gujarati', nativeSample: 'નમસ્તે, હું સૂર્ય છું.' },
+  { code: 'gu-IN', name: 'Gujarati (ગુજરાતી)', script: 'Gujarati', nativeSample: 'નમસ્તે, હું સૂર્ય છું।' },
   { code: 'pa-IN', name: 'Punjabi (ਪੰਜਾਬੀ)', script: 'Gurmukhi', nativeSample: 'ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ, ਮੈਂ ਸੂਰਿਆ ਹਾਂ।' },
   { code: 'or-IN', name: 'Odia (ଓଡ଼ିଆ)', script: 'Odia', nativeSample: 'ନମସ୍କାର, ମୁଁ ସୂର୍ଯ୍ୟ।' },
   { code: 'as-IN', name: 'Assamese (অসমীয়া)', script: 'Bengali', nativeSample: 'নমস্কাৰ, মই সূৰ্য।' },
@@ -110,13 +164,14 @@ class VoiceProfileManager {
 
   constructor() {
     this.settings = {
-      profileId: 'suryadev-radiant',
+      profileId: 'jarvis-male',
       language: 'en-IN',
-      rate: 1.05,
-      pitch: 0.92,
+      rate: 1.0,
+      pitch: 0.90,
       wakeWordEnabled: false,
       sensitivity: 0.75,
       autoStopSpeakingOnInterrupt: true,
+      selectedVoiceURI: undefined,
     };
     this.loadSettings();
   }
@@ -129,6 +184,9 @@ class VoiceProfileManager {
         const parsed = JSON.parse(saved);
         if (parsed.profileId && VOICE_PROFILES[parsed.profileId as VoiceProfileId]) {
           this.settings = { ...this.settings, ...parsed };
+        } else {
+          // Fallback safely if profile disappeared
+          this.settings.profileId = 'jarvis-male';
         }
       }
     } catch (e) {
@@ -155,11 +213,17 @@ class VoiceProfileManager {
   }
 
   public getActiveProfile(): VoiceProfile {
-    return VOICE_PROFILES[this.settings.profileId] || VOICE_PROFILES['suryadev-radiant'];
+    return VOICE_PROFILES[this.settings.profileId] || VOICE_PROFILES['jarvis-male'];
   }
 
   public getAllProfiles(): VoiceProfile[] {
     return Object.values(VOICE_PROFILES);
+  }
+
+  public getProfilesByGender(gender?: 'male' | 'female' | 'neutral' | 'all'): VoiceProfile[] {
+    const all = Object.values(VOICE_PROFILES);
+    if (!gender || gender === 'all') return all;
+    return all.filter((p) => p.gender === gender);
   }
 
   public setProfile(profileId: VoiceProfileId) {
@@ -169,9 +233,15 @@ class VoiceProfileManager {
     this.settings.profileId = profileId;
     this.settings.pitch = profile.pitch;
     this.settings.rate = profile.rate;
-    // Auto-switch default language if language isn't explicitly set to another custom language
     if (profile.preferredLang && (this.settings.language === 'en-US' || this.settings.language === 'en-IN' || profileId === 'hindi-command')) {
       this.settings.language = profile.preferredLang;
+    }
+
+    // Reset explicit voice URI if switching across genders to allow auto-resolution of appropriate gender voice
+    const currentGender = profile.gender;
+    const previousProfile = this.getActiveProfile();
+    if (previousProfile && previousProfile.gender !== currentGender) {
+      this.settings.selectedVoiceURI = undefined;
     }
 
     this.persist();
@@ -181,10 +251,11 @@ class VoiceProfileManager {
 
   public setLanguage(langCode: string) {
     this.settings.language = langCode;
-    // If switching to Hindi, switch to Hindi Command profile if currently on generic
     if (langCode === 'hi-IN' && this.settings.profileId === 'futuristic-ai') {
       this.settings.profileId = 'hindi-command';
     }
+    // Language change resets selectedVoiceURI if it was specific to another language
+    this.settings.selectedVoiceURI = undefined;
     this.persist();
     this.syncNativeBridge();
     this.notify();
@@ -199,6 +270,29 @@ class VoiceProfileManager {
 
   public setPitch(pitch: number) {
     this.settings.pitch = Math.max(0.5, Math.min(1.5, pitch));
+    this.persist();
+    this.syncNativeBridge();
+    this.notify();
+  }
+
+  public setSelectedVoiceURI(uri?: string) {
+    this.settings.selectedVoiceURI = uri;
+    this.persist();
+    this.syncNativeBridge();
+    this.notify();
+  }
+
+  public resetToDefault() {
+    this.settings = {
+      profileId: 'jarvis-male',
+      language: 'en-IN',
+      rate: 1.0,
+      pitch: 0.90,
+      wakeWordEnabled: this.settings.wakeWordEnabled,
+      sensitivity: 0.75,
+      autoStopSpeakingOnInterrupt: true,
+      selectedVoiceURI: undefined,
+    };
     this.persist();
     this.syncNativeBridge();
     this.notify();
@@ -229,9 +323,6 @@ class VoiceProfileManager {
     } catch (e) {}
   }
 
-  /**
-   * Sync voice settings with native Android TextToSpeech if running inside Android WebView
-   */
   public syncNativeBridge() {
     if (typeof window === 'undefined') return;
     const bridge = (window as any).AndroidSuryaBridge;
@@ -240,15 +331,18 @@ class VoiceProfileManager {
         if (typeof bridge.setVoiceLanguage === 'function') {
           bridge.setVoiceLanguage(this.settings.language);
         }
+        if (typeof bridge.setPitchAndRate === 'function') {
+          bridge.setPitchAndRate(this.settings.pitch, this.settings.rate);
+        }
+        if (this.settings.selectedVoiceURI && typeof bridge.setVoiceById === 'function') {
+          bridge.setVoiceById(this.settings.selectedVoiceURI);
+        }
       } catch (e) {
         console.warn('[VoiceProfileManager] Android bridge voice sync:', e);
       }
     }
   }
 
-  /**
-   * Honest check about device TTS capabilities
-   */
   public getHardwareCapabilityNotice(): { hasPitchControl: boolean; message: string } {
     if (typeof window === 'undefined') return { hasPitchControl: false, message: 'Server environment' };
 
@@ -256,7 +350,7 @@ class VoiceProfileManager {
     if (isNative) {
       return {
         hasPitchControl: true,
-        message: 'Native Android TextToSpeech engine with locale-specific neural timbre rendering.',
+        message: 'Native Android TextToSpeech engine with locale-specific neural timbre rendering & voice selection.',
       };
     }
 
@@ -268,10 +362,9 @@ class VoiceProfileManager {
       };
     }
 
-    // Browsers support pitch parameter, but neural web voices may ignore pitch in favor of natural timbre
     return {
       hasPitchControl: true,
-      message: 'Web Speech API active. Pitch and rate are dynamically modulated; timbre depends on browser neural voice.',
+      message: 'Web Speech API active. Male and female voices, pitch, rate, and specific voice URIs fully supported.',
     };
   }
 }

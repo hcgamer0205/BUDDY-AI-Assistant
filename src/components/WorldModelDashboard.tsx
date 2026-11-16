@@ -54,7 +54,7 @@ export const WorldModelDashboard: React.FC = () => {
     setMemoryEnabled(next);
     setStatusNotice(
       next
-        ? 'Personal Memory active: SURYA can learn user-approved preferences and recall facts.'
+        ? 'Personal Memory active: BUDDY can learn user-approved preferences and recall facts.'
         : 'Personal Memory paused: new memory extraction and prompt memory injection disabled.'
     );
   };
@@ -306,7 +306,7 @@ export const WorldModelDashboard: React.FC = () => {
 
         {memories.length === 0 && (
           <div className="p-8 text-center text-slate-500 text-xs font-mono">
-            No memories stored. Teach SURYA your preferences and context above.
+            No memories stored. Teach BUDDY your preferences and context above.
           </div>
         )}
       </div>

@@ -51,9 +51,9 @@ const WELCOME_MESSAGE = (): ChatMessage => ({
   id: 'init_1',
   role: 'assistant',
   content:
-    'SURYA ready. Ask a question, issue a voice command, manage tasks, or switch between Cloud Gemini and On-Device Offline AI anytime.',
+    'BUDDY ready. Ask a question, issue a voice command, manage tasks, or switch between Cloud Gemini and On-Device Offline AI anytime.',
   timestamp: new Date().toISOString(),
-  model: 'SURYA Command Core',
+  model: 'BUDDY Command Core',
 });
 
 function loadPersistedMessages(): ChatMessage[] {
@@ -236,7 +236,7 @@ export default function App() {
             ? {
                 ...m,
                 role: 'system',
-                content: `SURYA Notice: ${err?.message || 'Communication error.'}`,
+                content: `BUDDY Notice: ${err?.message || 'Communication error.'}`,
               }
             : m
         )
@@ -429,16 +429,15 @@ export default function App() {
 
   return (
     <div
-      className="min-h-screen text-slate-100 flex flex-col font-sans transition-colors duration-300 selection:bg-amber-500/30"
+      className="min-h-screen text-slate-100 flex flex-col font-sans transition-colors duration-300 selection:bg-emerald-500/30 selection:text-emerald-100"
       style={{
         backgroundColor: currentTheme.palette.background,
         color: currentTheme.palette.textPrimary,
       }}
     >
-      {/* Clean Top Bar */}
+      {/* Clean Glassmorphic Top Bar */}
       <header
-        className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 backdrop-blur-md border-b border-slate-800/80 pt-safe"
-        style={{ backgroundColor: `${currentTheme.palette.surface}f2` }}
+        className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-[#070d14]/85 backdrop-blur-2xl border-b border-emerald-500/20 pt-safe shadow-sm select-none"
       >
         <div className="flex items-center gap-2.5 min-w-0">
           {isChildWorkspace && (
@@ -449,18 +448,19 @@ export default function App() {
                 setCurrentTab('more');
               }}
               aria-label="Back to More"
-              className="min-h-[34px] min-w-[34px] rounded-xl bg-[#0b0f17] border border-slate-800 text-slate-300 hover:text-white flex items-center justify-center shrink-0"
+              className="min-h-[34px] min-w-[34px] rounded-xl bg-[#0b1522]/80 border border-emerald-500/25 text-slate-300 hover:text-white flex items-center justify-center shrink-0 cursor-pointer"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
           <div className="min-w-0">
-            <h1 className="text-sm font-semibold tracking-wide text-slate-100 leading-tight">
-              SURYA
+            <h1 className="text-sm font-bold tracking-wider text-white leading-tight flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+              BUDDY
             </h1>
-            <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+            <div className="flex items-center gap-1.5 text-[11px] text-emerald-300/80">
               <span className={`w-1.5 h-1.5 rounded-full ${headerStatusDot}`} />
-              <span className="truncate max-w-[180px]">{headerStatusText}</span>
+              <span className="truncate max-w-[180px] font-medium">{headerStatusText}</span>
             </div>
           </div>
         </div>
@@ -473,10 +473,10 @@ export default function App() {
               setShowVoiceModal(true);
             }}
             aria-label="Voice settings"
-            className="min-h-[36px] flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#0b0f17] border border-slate-800 hover:border-slate-700 text-xs text-slate-200 transition-colors"
+            className="min-h-[36px] flex items-center gap-1.5 px-3 py-1 rounded-xl bg-[#0b1522]/80 backdrop-blur-md border border-emerald-500/25 hover:border-emerald-400/50 text-xs text-emerald-200 transition-all cursor-pointer shadow-sm"
           >
-            <Mic className="w-3.5 h-3.5 text-[#d4a84f]" />
-            <span className="truncate max-w-[78px]">
+            <Mic className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="truncate max-w-[84px] font-medium">
               {voiceProfileManager.getActiveProfile().name.split(' ')[0]}
             </span>
           </button>
@@ -485,9 +485,9 @@ export default function App() {
             type="button"
             onClick={toggleSound}
             aria-label={soundMuted ? 'Unmute sounds' : 'Mute sounds'}
-            className="min-h-[36px] min-w-[36px] rounded-xl bg-[#0b0f17] border border-slate-800 text-slate-300 hover:text-[#d4a84f] flex items-center justify-center transition-colors"
+            className="min-h-[36px] min-w-[36px] rounded-xl bg-[#0b1522]/80 backdrop-blur-md border border-emerald-500/25 hover:border-emerald-400/50 text-slate-300 hover:text-emerald-300 flex items-center justify-center transition-all cursor-pointer shadow-sm"
           >
-            {soundMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-[#d4a84f]" />}
+            {soundMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
           </button>
         </div>
       </header>
@@ -655,17 +655,17 @@ export default function App() {
         {currentTab === 'system' && (
           <div className="space-y-3 pb-24">
             <div className="max-w-2xl mx-auto px-4 pt-3">
-              <div className="flex items-center gap-1 p-1 bg-[#121826] rounded-xl border border-slate-800">
+              <div className="flex items-center gap-1 p-1 bg-[#0b1522]/90 backdrop-blur-xl rounded-2xl border border-emerald-500/20 shadow-md">
                 <button
                   type="button"
                   onClick={() => {
                     soundFx.playClick();
                     setSystemSubTab('health');
                   }}
-                  className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                     systemSubTab === 'health'
-                      ? 'bg-[#d4a84f] text-slate-950 font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-emerald-500 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                      : 'text-slate-400 hover:text-emerald-200'
                   }`}
                 >
                   <Activity className="w-3.5 h-3.5" />
@@ -677,10 +677,10 @@ export default function App() {
                     soundFx.playClick();
                     setSystemSubTab('world');
                   }}
-                  className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                     systemSubTab === 'world'
-                      ? 'bg-[#d4a84f] text-slate-950 font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-emerald-500 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                      : 'text-slate-400 hover:text-emerald-200'
                   }`}
                 >
                   <Database className="w-3.5 h-3.5" />
@@ -692,10 +692,10 @@ export default function App() {
                     soundFx.playClick();
                     setSystemSubTab('science');
                   }}
-                  className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                     systemSubTab === 'science'
-                      ? 'bg-[#d4a84f] text-slate-950 font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-emerald-500 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                      : 'text-slate-400 hover:text-emerald-200'
                   }`}
                 >
                   <Atom className="w-3.5 h-3.5" />
@@ -707,10 +707,10 @@ export default function App() {
                     soundFx.playClick();
                     setSystemSubTab('improve');
                   }}
-                  className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                     systemSubTab === 'improve'
-                      ? 'bg-[#d4a84f] text-slate-950 font-semibold'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-emerald-500 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                      : 'text-slate-400 hover:text-emerald-200'
                   }`}
                 >
                   <FileCode className="w-3.5 h-3.5" />

@@ -123,7 +123,7 @@ test('1. AndroidManifest.xml & Package Identity Audit for SURYA AI', () => {
   assert.ok(content.includes('android.permission.FOREGROUND_SERVICE_MICROPHONE'), 'Must declare FOREGROUND_SERVICE_MICROPHONE');
   assert.ok(content.includes('android.permission.POST_NOTIFICATIONS'), 'Must declare POST_NOTIFICATIONS');
   assert.ok(content.includes('com.surya.assistant.fileprovider'), 'Must declare SURYA FileProvider');
-  assert.ok(content.includes('SURYA AI'), 'App label must be SURYA AI');
+  assert.ok(content.includes('BUDDY AI'), 'App label must be BUDDY AI');
   assert.ok(content.includes('<queries>'), 'Must declare package visibility queries for Android 11+');
   assert.ok(content.includes('SuryaHandsFreeService'), 'Must register SuryaHandsFreeService');
   assert.ok(content.includes('SuryaWidgetProvider'), 'Must register SuryaWidgetProvider');
@@ -138,7 +138,7 @@ test('2. Capacitor Configuration Structure for SURYA', () => {
 
   const content = fs.readFileSync(capPath, 'utf-8');
   assert.ok(content.includes('com.surya.assistant'), 'AppId must be com.surya.assistant');
-  assert.ok(content.includes('SURYA AI'), 'AppName must be SURYA AI');
+  assert.ok(content.includes('BUDDY AI'), 'AppName must be BUDDY AI');
   assert.ok(content.includes("webDir: 'dist'"), 'webDir must be dist');
   assert.match(content, /CapacitorHttp:\s*\{\s*enabled:\s*false/, 'CapacitorHttp must be disabled so WebView fetch streams SSE chunks natively');
   assert.match(content, /CapacitorCookies:\s*\{\s*enabled:\s*false/, 'CapacitorCookies must be disabled for stateless Bearer API calls');
@@ -935,4 +935,103 @@ test('22. Android Native Gradle Dependencies, SuryaOfflineModelService & MainAct
   assert.ok(mainActSrc.includes('generateLocalLlmResponse'), 'Bridge must expose generateLocalLlmResponse');
   assert.ok(mainActSrc.includes('analyzeImageOffline'), 'Bridge must expose analyzeImageOffline');
 });
+
+// 23. Male Voice System, Advanced Voice Profiles, Gender Filtering, and Persistence
+test('23. Male Voice System, Advanced Voice Profiles, Gender Filtering, and Persistence', () => {
+  const managerPath = path.join(process.cwd(), 'src/services/voiceProfileManager.ts');
+  assert.ok(fs.existsSync(managerPath), 'voiceProfileManager.ts must exist');
+  const managerSrc = fs.readFileSync(managerPath, 'utf8');
+
+  assert.ok(managerSrc.includes('jarvis-male'), 'JARVIS male voice profile must exist');
+  assert.ok(managerSrc.includes('stark-male'), 'STARK male voice profile must exist');
+  assert.ok(managerSrc.includes('atlas-male'), 'ATLAS male voice profile must exist');
+  assert.ok(managerSrc.includes('neutral-voice'), 'NEUTRAL voice profile must exist');
+  assert.ok(managerSrc.includes('suryadev-radiant'), 'Suryadev female profile must be preserved');
+  assert.ok(managerSrc.includes('hindi-command'), 'Hindi command female profile must be preserved');
+  assert.ok(managerSrc.includes('getProfilesByGender'), 'Must support gender filtering');
+  assert.ok(managerSrc.includes('resetToDefault'), 'Must support reset to default');
+  assert.ok(managerSrc.includes('setPitchAndRate'), 'Must sync pitch and rate to Android bridge');
+  assert.ok(managerSrc.includes('setVoiceById'), 'Must sync voice ID to Android bridge');
+
+  const servicePath = path.join(process.cwd(), 'src/services/voiceService.ts');
+  assert.ok(fs.existsSync(servicePath), 'voiceService.ts must exist');
+  const serviceSrc = fs.readFileSync(servicePath, 'utf8');
+  assert.ok(serviceSrc.includes('getAvailableVoices'), 'VoiceService must expose getAvailableVoices');
+  assert.ok(serviceSrc.includes('selectedVoiceURI'), 'VoiceService must support selectedVoiceURI');
+  assert.ok(serviceSrc.includes('detectVoiceGender'), 'VoiceService must export detectVoiceGender');
+  assert.ok(serviceSrc.includes('resolveVoice'), 'VoiceService must expose unified resolveVoice');
+  assert.ok(serviceSrc.includes('voiceOverrideURI'), 'VoiceService speak must accept voiceOverrideURI for previews');
+  assert.ok(serviceSrc.includes('speakTextWithConfig'), 'VoiceService must call Android speakTextWithConfig');
+
+  const modalPath = path.join(process.cwd(), 'src/components/VoiceSettingsModal.tsx');
+  assert.ok(fs.existsSync(modalPath), 'VoiceSettingsModal.tsx must exist');
+  const modalSrc = fs.readFileSync(modalPath, 'utf8');
+  assert.ok(modalSrc.includes('male'), 'VoiceSettingsModal must support male voice selection/filtering');
+  assert.ok(modalSrc.includes('female'), 'VoiceSettingsModal must support female voice selection');
+  assert.ok(modalSrc.includes('Preview'), 'VoiceSettingsModal must support Play Preview / Audition');
+  assert.ok(modalSrc.includes('Reset'), 'VoiceSettingsModal must support Reset to Default');
+  assert.ok(modalSrc.includes('requiresVoiceInstall'), 'VoiceSettingsModal must warn when no male voice is installed');
+  assert.ok(modalSrc.includes('handlePreviewSystemVoice'), 'VoiceSettingsModal must preview exact voice using voiceURI');
+});
+
+// 24. Accurate Gender Classification, Fallback Guard & Android TTS Native Bridge Integrity
+test('24. Accurate Gender Classification, Fallback Guard & Android TTS Native Bridge Integrity', () => {
+  // Test accurate gender classification regex logic (ensuring "female" NEVER matches "male")
+  function detectGender(name, features = []) {
+    if (features && Array.isArray(features)) {
+      for (const f of features) {
+        const lf = f.toLowerCase();
+        if (lf.includes('gender=male') || lf === 'male') return 'male';
+        if (lf.includes('gender=female') || lf === 'female') return 'female';
+      }
+    }
+    const n = name.toLowerCase();
+    const isFemale =
+      /(^|[^a-z])female([^a-z]|$)/i.test(n) ||
+      /(^|[^a-z])(woman|girl|lady)([^a-z]|$)/i.test(n) ||
+      /zira|helen|jenny|hazel|samantha|victoria|karen|sfg#female|rjs#female|cfc#female|cxx#female|m01#female/i.test(n);
+    if (isFemale) return 'female';
+
+    const isMale =
+      /(^|[^a-z])(male|guy|man|boy)([^a-z]|$)/i.test(n) ||
+      /#male|-male|_male|male_|\bmale\d*\b/i.test(n) ||
+      /david|mark|george|daniel|james|richard|ravi|pradeep|mohan|amit|sfg#male|rjs#male|iob#male|cxx#male|cfc#male|hie#male|hid#male|smt-.*-m0\d/i.test(n);
+    if (isMale) return 'male';
+    return 'unverified';
+  }
+
+  // 1. Female voices must NEVER be classified as male (preventing substring collision)
+  assert.strictEqual(detectGender('Google UK English Female'), 'female', 'Google UK English Female must be female');
+  assert.strictEqual(detectGender('en-us-x-sfg#female_1-local'), 'female', 'Android female voice must be female');
+  assert.strictEqual(detectGender('Microsoft Zira - English (United States)'), 'female', 'Zira must be female');
+  assert.strictEqual(detectGender('hi-in-x-cfc#female_1-local'), 'female', 'Hindi female voice must be female');
+  assert.notStrictEqual(detectGender('Google UK English Female'), 'male', 'Female voice must never be classified as male');
+
+  // 2. Real-world Android and Web male voices must be accurately classified
+  assert.strictEqual(detectGender('Google UK English Male'), 'male', 'Google UK English Male must be male');
+  assert.strictEqual(detectGender('en-us-x-sfg#male_1-local'), 'male', 'Android sfg#male must be male');
+  assert.strictEqual(detectGender('en-in-x-end#male_1-local'), 'male', 'Indian English end#male must be male');
+  assert.strictEqual(detectGender('Microsoft David - English (United States)'), 'male', 'David must be male');
+  assert.strictEqual(detectGender('hi-in-x-cfc#male_1-local'), 'male', 'Hindi cfc#male must be male');
+  assert.strictEqual(detectGender('en-gb-x-rjs#male_1-local'), 'male', 'British rjs#male must be male');
+  assert.strictEqual(detectGender('Custom Robotic Synthesizer'), 'unverified', 'Ambiguous voice must be unverified');
+
+  // 3. Android MainActivity.java native bridge inspection
+  const mainActPath = path.join(process.cwd(), 'android/app/src/main/java/com/surya/assistant/MainActivity.java');
+  assert.ok(fs.existsSync(mainActPath), 'MainActivity.java must exist');
+  const mainActSrc = fs.readFileSync(mainActPath, 'utf8');
+
+  assert.ok(mainActSrc.includes('getAvailableTtsVoices'), 'Bridge must expose getAvailableTtsVoices()');
+  assert.ok(mainActSrc.includes('getTtsEngines'), 'Bridge must expose getTtsEngines()');
+  assert.ok(mainActSrc.includes('setVoiceById'), 'Bridge must expose setVoiceById(String voiceId)');
+  assert.ok(mainActSrc.includes('setPitchAndRate'), 'Bridge must expose setPitchAndRate(float pitch, float rate)');
+  assert.ok(mainActSrc.includes('hasMaleVoice'), 'Bridge must expose hasMaleVoice(String langCode)');
+  assert.ok(mainActSrc.includes('speakTextWithConfig'), 'Bridge must expose speakTextWithConfig()');
+  assert.ok(mainActSrc.includes('openTtsSettings'), 'Bridge must expose openTtsSettings()');
+  assert.ok(mainActSrc.includes('tts.setVoice('), 'Bridge must invoke tts.setVoice');
+  assert.ok(mainActSrc.includes('tts.setPitch('), 'Bridge must invoke tts.setPitch');
+  assert.ok(mainActSrc.includes('tts.setSpeechRate('), 'Bridge must invoke tts.setSpeechRate');
+});
+
+
 

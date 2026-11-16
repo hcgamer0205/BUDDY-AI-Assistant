@@ -42,7 +42,7 @@ export const SelfImprovementReport: React.FC = () => {
       <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-[11px] text-slate-400 flex items-start gap-2.5">
         <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
         <p>
-          SURYA Self-Improvement operates strictly under Human-in-the-Loop governance.
+          BUDDY Self-Improvement operates strictly under Human-in-the-Loop governance.
           The engine analyzes diagnostics and proposes targeted optimizations, but never executes autonomous code changes without verified developer review.
         </p>
       </div>

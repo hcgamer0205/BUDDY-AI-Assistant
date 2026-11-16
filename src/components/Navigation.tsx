@@ -28,7 +28,7 @@ export const Navigation: React.FC<NavigationProps> = ({ currentTab, onSelectTab 
     return () => unsub();
   }, []);
 
-  const primaryCol = theme.palette.primary;
+  const primaryCol = theme.palette.primary || '#10b981';
 
   const tabs: { id: TabType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'core', label: 'Home', icon: Home },
@@ -40,9 +40,9 @@ export const Navigation: React.FC<NavigationProps> = ({ currentTab, onSelectTab 
   return (
     <nav
       aria-label="Primary Navigation"
-      className="fixed bottom-0 left-0 right-0 z-40 border-t border-slate-800/80 bg-[#0d121d]/95 backdrop-blur-lg pb-safe"
+      className="fixed bottom-0 left-0 right-0 z-40 border-t border-emerald-500/20 bg-[#070d14]/85 backdrop-blur-2xl shadow-[0_-10px_35px_rgba(0,0,0,0.6)] pb-safe select-none"
     >
-      <div className="max-w-lg mx-auto grid grid-cols-4 items-center h-14 px-2">
+      <div className="max-w-lg mx-auto grid grid-cols-4 items-center h-15 px-3">
         {tabs.map((tab) => {
           const Icon = tab.icon;
           const isActive =
@@ -58,13 +58,31 @@ export const Navigation: React.FC<NavigationProps> = ({ currentTab, onSelectTab 
                 onSelectTab(tab.id);
               }}
               aria-current={isActive ? 'page' : undefined}
-              className={`flex flex-col items-center justify-center min-h-[44px] py-1 rounded-xl transition-colors active:scale-95 ${
-                isActive ? 'font-semibold' : 'text-slate-400 hover:text-slate-200'
+              className={`relative flex flex-col items-center justify-center min-h-[48px] py-1.5 rounded-2xl transition-all duration-200 active:scale-95 cursor-pointer ${
+                isActive
+                  ? 'font-semibold'
+                  : 'text-slate-400 hover:text-emerald-300'
               }`}
               style={{ color: isActive ? primaryCol : undefined }}
             >
-              <Icon className="w-[18px] h-[18px]" />
-              <span className="text-[11px] mt-1 tracking-tight leading-none">{tab.label}</span>
+              <div
+                className={`relative flex items-center justify-center w-8 h-8 rounded-xl transition-all ${
+                  isActive
+                    ? 'bg-emerald-500/15 shadow-[0_0_15px_rgba(16,185,129,0.3)]'
+                    : ''
+                }`}
+              >
+                <Icon className="w-[19px] h-[19px]" />
+              </div>
+              <span className="text-[11px] mt-0.5 tracking-tight leading-none">
+                {tab.label}
+              </span>
+              {isActive && (
+                <span
+                  className="absolute bottom-1 w-1.5 h-1.5 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.8)]"
+                  style={{ backgroundColor: primaryCol }}
+                />
+              )}
             </button>
           );
         })}

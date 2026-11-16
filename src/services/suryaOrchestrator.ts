@@ -54,7 +54,7 @@ class SuryaOrchestrator {
 
       return {
         responseText: parsedVoice.spokenResponse || parsedVoice.actionSummary || 'Done.',
-        model: parsedVoice.category === 'local_app' ? 'Local Intent Router (0ms)' : 'SURYA Command Core',
+        model: parsedVoice.category === 'local_app' ? 'Local Intent Router (0ms)' : 'BUDDY Command Core',
         latencyMs: Date.now() - startTime,
         handledLocally: true,
         actionSummary: parsedVoice.actionSummary,
@@ -64,21 +64,21 @@ class SuryaOrchestrator {
     // 2. Navigation voice shortcuts ("open optics", "open studio", "open tasks", "go home")
     if (/^(open|show|go to)\s+(optics|vision|camera hud)/i.test(lower)) {
       callbacks.onNavigateTab?.('optics');
-      const reply = 'Opening SURYA Vision workspace.';
+      const reply = 'Opening BUDDY Vision workspace.';
       callbacks.onSpeak?.(reply);
-      return { responseText: reply, model: 'SURYA Navigator', latencyMs: 5, handledLocally: true };
+      return { responseText: reply, model: 'BUDDY Navigator', latencyMs: 5, handledLocally: true };
     }
     if (/^(open|show|go to)\s+(studio|app creator|code)/i.test(lower)) {
       callbacks.onNavigateTab?.('studio');
-      const reply = 'Opening SURYA Studio workspace.';
+      const reply = 'Opening BUDDY Studio workspace.';
       callbacks.onSpeak?.(reply);
-      return { responseText: reply, model: 'SURYA Navigator', latencyMs: 5, handledLocally: true };
+      return { responseText: reply, model: 'BUDDY Navigator', latencyMs: 5, handledLocally: true };
     }
     if (/^(open|show|go to)\s+(planner|tasks|productivity|agenda|automations)/i.test(lower)) {
       callbacks.onNavigateTab?.('productivity');
       const reply = 'Opening Tasks, Agenda, and Automations.';
       callbacks.onSpeak?.(reply);
-      return { responseText: reply, model: 'SURYA Navigator', latencyMs: 5, handledLocally: true };
+      return { responseText: reply, model: 'BUDDY Navigator', latencyMs: 5, handledLocally: true };
     }
 
     // 3. Explicit User-Controlled Long-Term Memory Directives

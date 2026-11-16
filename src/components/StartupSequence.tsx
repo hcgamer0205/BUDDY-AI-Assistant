@@ -10,10 +10,10 @@ export const StartupSequence: React.FC<StartupSequenceProps> = ({ primaryColor, 
   const [stepIndex, setStepIndex] = useState(0);
 
   const stages = [
-    'CALIBRATING SOLAR CORONA MATRIX',
+    'CALIBRATING EMERALD GLASS MATRIX',
     'SYNCHRONIZING 10-AGENT INTELLIGENCE CORE',
-    'VERIFYING NATIVE ANDROID BRIDGE & VERONICA GUARD',
-    'SURYA OPERATING ENVIRONMENT ONLINE',
+    'VERIFYING NATIVE ANDROID BRIDGE & SECURITY GUARD',
+    'BUDDY OPERATING ENVIRONMENT ONLINE',
   ];
 
   useEffect(() => {
@@ -32,8 +32,8 @@ export const StartupSequence: React.FC<StartupSequenceProps> = ({ primaryColor, 
   return (
     <div
       role="dialog"
-      aria-label="SURYA Boot Sequence"
-      className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#05070e] px-6 text-center select-none"
+      aria-label="BUDDY Boot Sequence"
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#070d14] px-6 text-center select-none"
     >
       <div className="relative w-32 h-32 flex items-center justify-center mb-6">
         <div
@@ -41,7 +41,7 @@ export const StartupSequence: React.FC<StartupSequenceProps> = ({ primaryColor, 
           style={{ borderColor: `${primaryColor}88` }}
         />
         <div
-          className="w-20 h-20 rounded-full border flex items-center justify-center shadow-2xl"
+          className="w-20 h-20 rounded-full border flex items-center justify-center shadow-2xl backdrop-blur-xl"
           style={{
             borderColor: primaryColor,
             backgroundColor: `${primaryColor}18`,
@@ -56,7 +56,7 @@ export const StartupSequence: React.FC<StartupSequenceProps> = ({ primaryColor, 
         className="text-xl font-mono font-bold tracking-[0.25em] uppercase mb-2"
         style={{ color: primaryColor }}
       >
-        SURYA AI
+        BUDDY AI
       </h1>
       <p className="text-xs font-mono text-slate-300 tracking-wider mb-6 min-h-[1.25rem]">
         {stages[stepIndex]}

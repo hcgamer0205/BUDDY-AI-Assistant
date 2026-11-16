@@ -9,7 +9,7 @@ interface CapacitorConfig {
 
 const config: CapacitorConfig = {
   appId: 'com.surya.assistant',
-  appName: 'SURYA AI',
+  appName: 'BUDDY AI',
   webDir: 'dist',
   server: {
     androidScheme: 'https',

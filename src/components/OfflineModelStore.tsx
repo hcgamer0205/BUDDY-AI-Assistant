@@ -115,8 +115,8 @@ export const OfflineModelStore: React.FC = () => {
         mode === 'offline'
           ? 'Offline Only enabled. Cloud Gemini requests are blocked while offline mode is active.'
           : mode === 'online'
-          ? 'Online Only enabled. SURYA routes chat directly to Cloud Gemini.'
-          : 'Auto mode enabled. SURYA uses Cloud when connected and falls back cleanly when offline.',
+          ? 'Online Only enabled. BUDDY routes chat directly to Cloud Gemini.'
+          : 'Auto mode enabled. BUDDY uses Cloud when connected and falls back cleanly when offline.',
       tone: 'info',
     });
   };

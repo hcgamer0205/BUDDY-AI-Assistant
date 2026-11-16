@@ -70,12 +70,12 @@ export const AppCreatorWorkspace: React.FC = () => {
             language: 'html',
             content: `<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>SURYA App</title><script src="https://cdn.tailwindcss.com"></script></head>
+<head><meta charset="utf-8"><title>BUDDY App</title><script src="https://cdn.tailwindcss.com"></script></head>
 <body class="bg-slate-950 text-slate-100 p-6 font-sans">
-  <h1 class="text-lg font-semibold text-amber-300">SURYA Studio Preview</h1>
+  <h1 class="text-lg font-semibold text-emerald-400">BUDDY Studio Preview</h1>
   <p class="text-xs text-slate-400 mt-1">Describe an app above to build with Gemini, or edit source in the Code tab.</p>
-  <button onclick="document.getElementById('out').innerText = 'Updated at ' + new Date().toLocaleTimeString()" class="mt-4 px-4 py-2 rounded-lg bg-amber-400 text-slate-950 font-medium text-xs">Test Interaction</button>
-  <p id="out" class="mt-3 text-xs font-mono text-blue-300"></p>
+  <button onclick="document.getElementById('out').innerText = 'Updated at ' + new Date().toLocaleTimeString()" class="mt-4 px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 font-semibold text-xs shadow-md">Test Interaction</button>
+  <p id="out" class="mt-3 text-xs font-mono text-emerald-300"></p>
 </body>
 </html>`,
           },
@@ -342,11 +342,11 @@ export const AppCreatorWorkspace: React.FC = () => {
 
   return (
     <div className="flex flex-col w-full max-w-4xl mx-auto px-4 py-4 space-y-4 pb-24">
-      {/* Clean Header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
+      {/* Clean Glassmorphic Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-emerald-500/20 select-none">
         <div>
-          <h2 className="text-lg font-semibold text-slate-100">SURYA Studio</h2>
-          <p className="text-xs text-slate-400">Create apps, preview live, or check GitHub builds</p>
+          <h2 className="text-lg font-bold text-white tracking-wide">BUDDY Studio</h2>
+          <p className="text-xs text-emerald-300/80 font-medium">Create apps, preview live, or check GitHub builds</p>
         </div>
         <div className="flex items-center gap-1.5">
           {(
@@ -364,10 +364,10 @@ export const AppCreatorWorkspace: React.FC = () => {
                 setStudioTab(t.id);
                 if (t.id === 'github' && !githubData) handleInspectGithub();
               }}
-              className={`min-h-[36px] px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${
+              className={`min-h-[36px] px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                 studioTab === t.id
-                  ? 'bg-[#d4a84f] text-slate-950 font-semibold'
-                  : 'bg-[#121826] border border-slate-800 text-slate-300 hover:border-slate-700'
+                  ? 'bg-emerald-500 text-slate-950 shadow-[0_0_12px_rgba(16,185,129,0.4)]'
+                  : 'bg-[#0b1522]/80 backdrop-blur-md border border-emerald-500/20 text-slate-300 hover:border-emerald-400/50'
               }`}
             >
               {t.label}
@@ -377,20 +377,20 @@ export const AppCreatorWorkspace: React.FC = () => {
       </div>
 
       {/* Create App & Recent Projects */}
-      <div className="p-4 rounded-2xl bg-[#121826] border border-slate-800/80 space-y-3">
+      <div className="p-4 rounded-2xl bg-[#0b1522]/80 backdrop-blur-xl border border-emerald-500/20 shadow-xl space-y-3">
         <div className="flex flex-wrap gap-2">
           <input
             type="text"
             value={promptInput}
             onChange={(e) => setPromptInput(e.target.value)}
-            placeholder="Describe an app to create..."
-            className="flex-1 min-w-[200px] min-h-[42px] px-3.5 py-2 rounded-xl bg-[#0b0f17] border border-slate-800 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#d4a84f]"
+            placeholder="Describe an app to create with BUDDY..."
+            className="flex-1 min-w-[200px] min-h-[44px] px-4 py-2 rounded-xl bg-[#070d14]/90 border border-emerald-500/25 text-xs text-slate-100 placeholder-slate-400 focus:outline-none focus:border-emerald-400/80 shadow-inner"
           />
           <button
             type="button"
             onClick={() => handleGenerateApp()}
             disabled={isGenerating || !promptInput.trim()}
-            className="min-h-[42px] px-4 py-2 rounded-xl bg-[#d4a84f] hover:bg-[#e0b65f] disabled:opacity-40 text-slate-950 text-xs font-semibold flex items-center gap-1.5"
+            className="min-h-[44px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.35)] transition-all cursor-pointer"
           >
             {isGenerating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             <span>{isGenerating ? 'Creating...' : 'Create App'}</span>
@@ -400,7 +400,7 @@ export const AppCreatorWorkspace: React.FC = () => {
         {/* My Projects / Recent Projects */}
         {apps.length > 0 && (
           <div className="space-y-1.5">
-            <span className="text-xs text-slate-400 block">Recent Projects</span>
+            <span className="text-xs font-medium text-emerald-300/80 block">Recent Projects</span>
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
               {apps.map((appItem) => (
                 <button
@@ -411,10 +411,10 @@ export const AppCreatorWorkspace: React.FC = () => {
                     setCurrentApp(appItem);
                     setSelectedFileIdx(0);
                   }}
-                  className={`min-h-[34px] px-3 py-1 rounded-xl text-xs whitespace-nowrap border transition-colors ${
+                  className={`min-h-[34px] px-3.5 py-1 rounded-xl text-xs whitespace-nowrap border transition-all cursor-pointer ${
                     currentApp?.id === appItem.id
-                      ? 'bg-[#1a2438] border-[#d4a84f]/60 text-slate-100 font-medium'
-                      : 'bg-[#0b0f17] border-slate-800 text-slate-400 hover:text-slate-200'
+                      ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-200 font-semibold shadow-sm'
+                      : 'bg-[#070d14] border-emerald-500/20 text-slate-400 hover:text-emerald-200'
                   }`}
                 >
                   {appItem.name}
@@ -426,7 +426,7 @@ export const AppCreatorWorkspace: React.FC = () => {
       </div>
 
       {statusMessage && (
-        <div className="px-3.5 py-2.5 rounded-xl bg-[#121826] border border-slate-800 text-xs text-slate-200">
+        <div className="px-4 py-2.5 rounded-xl bg-[#0b1522]/85 backdrop-blur-md border border-emerald-500/25 text-xs text-emerald-200 shadow-md">
           {statusMessage}
         </div>
       )}
@@ -434,9 +434,9 @@ export const AppCreatorWorkspace: React.FC = () => {
       {/* PREVIEW TAB */}
       {studioTab === 'preview' && currentApp && (
         <div className="space-y-3">
-          <div className="p-3.5 rounded-2xl bg-[#121826] border border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+          <div className="p-3.5 rounded-2xl bg-[#0b1522]/80 backdrop-blur-xl border border-emerald-500/20 shadow-xl flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h3 className="text-sm font-semibold text-slate-100">{currentApp.name}</h3>
+              <h3 className="text-sm font-semibold text-white">{currentApp.name}</h3>
               <p className="text-xs text-slate-400">{currentApp.description}</p>
             </div>
             <div className="flex items-center gap-2">
@@ -444,7 +444,7 @@ export const AppCreatorWorkspace: React.FC = () => {
                 type="button"
                 onClick={handleAIDebug}
                 disabled={isDebugging}
-                className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#0b0f17] border border-slate-700 hover:border-slate-600 text-[#60a5fa] text-xs font-medium flex items-center gap-1.5"
+                className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#070d14] border border-teal-500/30 hover:border-teal-400 text-teal-300 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
               >
                 <Bug className={`w-3.5 h-3.5 ${isDebugging ? 'animate-spin' : ''}`} />
                 <span>{isDebugging ? 'Checking...' : 'AI Debug'}</span>
@@ -452,7 +452,7 @@ export const AppCreatorWorkspace: React.FC = () => {
               <button
                 type="button"
                 onClick={handleExportHtml}
-                className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#0b0f17] border border-slate-700 hover:border-slate-600 text-[#d4a84f] text-xs font-medium flex items-center gap-1.5"
+                className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#070d14] border border-emerald-500/30 hover:border-emerald-400 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Export HTML</span>
@@ -461,14 +461,14 @@ export const AppCreatorWorkspace: React.FC = () => {
           </div>
 
           {sandboxErrors.length > 0 && (
-            <div className="p-3 rounded-xl bg-rose-950/35 border border-rose-500/30 text-xs text-rose-200">
+            <div className="p-3 rounded-xl bg-rose-950/45 border border-rose-500/35 text-xs text-rose-200">
               Runtime errors: {sandboxErrors.join(' | ')}
             </div>
           )}
 
           {debugDiagnosis && (
-            <div className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 text-xs space-y-1">
-              <span className="font-medium text-emerald-300 block">
+            <div className="p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-500/35 text-xs space-y-1">
+              <span className="font-semibold text-emerald-300 block">
                 Diagnosis: {debugDiagnosis.diagnosis}
               </span>
               <ul className="list-disc pl-4 text-slate-300">
@@ -479,11 +479,11 @@ export const AppCreatorWorkspace: React.FC = () => {
             </div>
           )}
 
-          <div className="rounded-2xl border border-slate-800 overflow-hidden bg-[#070a12] h-80">
+          <div className="rounded-2xl border border-emerald-500/25 overflow-hidden bg-[#070a12] h-84 shadow-2xl">
             <iframe
               srcDoc={instrumentedHtml}
               sandbox="allow-scripts"
-              title="SURYA Studio Preview"
+              title="BUDDY Studio Preview"
               className="w-full h-full border-0"
             />
           </div>
@@ -493,16 +493,16 @@ export const AppCreatorWorkspace: React.FC = () => {
               type="text"
               value={modifyInput}
               onChange={(e) => setModifyInput(e.target.value)}
-              placeholder="Ask SURYA to update this app..."
-              className="flex-1 min-h-[42px] px-3.5 py-2 rounded-xl bg-[#121826] border border-slate-800 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#d4a84f]"
+              placeholder="Ask BUDDY to update this app..."
+              className="flex-1 min-h-[44px] px-4 py-2 rounded-xl bg-[#0b1522]/85 border border-emerald-500/25 text-xs text-slate-100 placeholder-slate-400 focus:outline-none focus:border-emerald-400/80 shadow-inner"
             />
             <button
               type="button"
               onClick={handleModifyApp}
               disabled={isGenerating || !modifyInput.trim()}
-              className="min-h-[42px] px-4 py-2 rounded-xl bg-[#121826] hover:bg-slate-800 border border-slate-700 disabled:opacity-40 text-slate-200 text-xs font-medium flex items-center gap-1.5"
+              className="min-h-[44px] px-4 py-2 rounded-xl bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/35 disabled:opacity-40 text-emerald-200 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
             >
-              <Wrench className="w-3.5 h-3.5 text-[#d4a84f]" />
+              <Wrench className="w-3.5 h-3.5 text-emerald-400" />
               <span>Update</span>
             </button>
           </div>
@@ -512,17 +512,17 @@ export const AppCreatorWorkspace: React.FC = () => {
       {/* CODE TAB */}
       {studioTab === 'code' && currentApp && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <div className="lg:col-span-2 p-3.5 rounded-2xl bg-[#121826] border border-slate-800 space-y-2.5">
+          <div className="lg:col-span-2 p-4 rounded-2xl bg-[#0b1522]/80 backdrop-blur-xl border border-emerald-500/20 shadow-xl space-y-2.5">
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
               {currentApp.files.map((f, idx) => (
                 <button
                   key={f.path}
                   type="button"
                   onClick={() => setSelectedFileIdx(idx)}
-                  className={`px-3 py-1 rounded-lg font-mono text-xs flex items-center gap-1 ${
+                  className={`px-3 py-1 rounded-xl font-mono text-xs flex items-center gap-1 transition-all cursor-pointer ${
                     selectedFileIdx === idx
-                      ? 'bg-[#d4a84f] text-slate-950 font-semibold'
-                      : 'bg-[#0b0f17] text-slate-300 border border-slate-800'
+                      ? 'bg-emerald-500 text-slate-950 font-semibold shadow-sm'
+                      : 'bg-[#070d14] text-slate-300 border border-emerald-500/20 hover:border-emerald-400/40'
                   }`}
                 >
                   <FileCode className="w-3 h-3" />
@@ -535,13 +535,13 @@ export const AppCreatorWorkspace: React.FC = () => {
               value={currentApp.files[selectedFileIdx]?.content || ''}
               onChange={(e) => handleCodeEdit(e.target.value)}
               rows={16}
-              className="w-full p-3 rounded-xl bg-[#0b0f17] border border-slate-800 font-mono text-xs text-slate-100 focus:outline-none focus:border-[#d4a84f]"
+              className="w-full p-3.5 rounded-2xl bg-[#070d14]/90 border border-emerald-500/25 font-mono text-xs text-emerald-100 focus:outline-none focus:border-emerald-400/80 shadow-inner"
             />
           </div>
 
-          <div className="p-3.5 rounded-2xl bg-[#121826] border border-slate-800 space-y-2.5">
-            <div className="flex items-center gap-1.5 text-xs font-medium text-slate-200">
-              <History className="w-4 h-4 text-[#d4a84f]" />
+          <div className="p-4 rounded-2xl bg-[#0b1522]/80 backdrop-blur-xl border border-emerald-500/20 shadow-xl space-y-2.5">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+              <History className="w-4 h-4 text-emerald-400" />
               <span>Version History</span>
             </div>
             {versionHistory.length === 0 ? (
@@ -551,14 +551,14 @@ export const AppCreatorWorkspace: React.FC = () => {
             ) : (
               <div className="space-y-2">
                 {versionHistory.map((snap) => (
-                  <div key={snap.id} className="p-2.5 rounded-xl bg-[#0b0f17] border border-slate-800 space-y-1">
+                  <div key={snap.id} className="p-2.5 rounded-xl bg-[#070d14] border border-emerald-500/20 space-y-1 shadow-sm">
                     <span className="text-xs font-medium text-slate-200 block">{snap.note}</span>
                     <div className="flex items-center justify-between text-[11px] text-slate-400 tabular-nums">
                       <span>{new Date(snap.timestamp).toLocaleTimeString()}</span>
                       <button
                         type="button"
                         onClick={() => handleRollback(snap)}
-                        className="text-[#d4a84f] hover:underline flex items-center gap-1"
+                        className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold cursor-pointer"
                       >
                         <RotateCcw className="w-3 h-3" />
                         <span>Restore</span>
