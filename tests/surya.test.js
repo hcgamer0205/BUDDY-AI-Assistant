@@ -922,6 +922,9 @@ test('22. Android Native Gradle Dependencies, SuryaOfflineModelService & MainAct
   assert.ok(fs.existsSync(nativeSvcPath), 'SuryaOfflineModelService.java must exist');
   const nativeSvc = fs.readFileSync(nativeSvcPath, 'utf8');
   assert.ok(nativeSvc.includes('LlmInference'), 'Native service must use MediaPipe LlmInference');
+  assert.ok(!nativeSvc.includes('setResultListener('), 'MediaPipe 0.10.22 Builder must not call deprecated setResultListener()');
+  assert.ok(nativeSvc.includes('llmInference.generateResponseAsync(prompt,'), 'MediaPipe 0.10.22 must pass progressListener to generateResponseAsync(prompt, listener)');
+  assert.ok(nativeSvc.includes('targetRequestId.equals(activeRequestId)'), 'Streaming callback must guard against stale or cancelled requestId');
   assert.ok(nativeSvc.includes('SHA-256'), 'Native service must verify SHA-256 digest');
   assert.ok(nativeSvc.includes('Range'), 'Native downloader must support HTTP Range resume');
   assert.ok(nativeSvc.includes('MemoryInfo') && nativeSvc.includes('StatFs'), 'Hardware detection required');

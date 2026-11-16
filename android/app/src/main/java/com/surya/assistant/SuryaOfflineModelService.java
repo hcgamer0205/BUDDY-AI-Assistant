@@ -82,8 +82,8 @@ public class SuryaOfflineModelService {
 
     private final Object runtimeLock = new Object();
     private LlmInference llmInference;
-    private String activeModelId = null;
-    private String activeRequestId = null;
+    private volatile String activeModelId = null;
+    private volatile String activeRequestId = null;
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
 
     public SuryaOfflineModelService(Context context, JsEmitter jsEmitter) {
@@ -497,19 +497,7 @@ public class SuryaOfflineModelService {
                 long beforeHeapKb = Debug.getNativeHeapAllocatedSize() / 1024;
                 LlmInference.LlmInferenceOptions.Builder builder = LlmInference.LlmInferenceOptions.builder()
                     .setModelPath(binFile.getAbsolutePath())
-                    .setMaxTokens(Math.max(256, Math.min(2048, maxTokens)))
-                    .setResultListener((partialResult, done) -> {
-                        String reqId = activeRequestId;
-                        if (reqId == null) return;
-                        try {
-                            JSONObject ev = new JSONObject();
-                            ev.put("requestId", reqId);
-                            ev.put("chunk", partialResult != null ? partialResult : "");
-                            ev.put("done", done);
-                            jsEmitter.emit("onLocalLlmToken", ev.toString());
-                        } catch (Exception ignored) {}
-                        if (done) activeRequestId = null;
-                    });
+                    .setMaxTokens(Math.max(256, Math.min(2048, maxTokens)));
 
                 llmInference = LlmInference.createFromOptions(context, builder.build());
                 activeModelId = modelId;
@@ -544,33 +532,67 @@ public class SuryaOfflineModelService {
     }
 
     public boolean generateResponseAsync(String requestId, String prompt) {
+        if (requestId == null || requestId.trim().isEmpty() || prompt == null) {
+            return false;
+        }
+        final String targetRequestId = requestId;
         synchronized (runtimeLock) {
-            if (llmInference == null || activeModelId == null) return false;
+            if (llmInference == null || activeModelId == null || activeRequestId != null) {
+                return false;
+            }
             cancelRequested.set(false);
-            activeRequestId = requestId;
+            activeRequestId = targetRequestId;
         }
         inferenceExecutor.submit(() -> {
             try {
                 synchronized (runtimeLock) {
-                    if (llmInference == null || cancelRequested.get()) return;
-                    llmInference.generateResponseAsync(prompt);
+                    if (llmInference == null || cancelRequested.get() || !targetRequestId.equals(activeRequestId)) {
+                        return;
+                    }
+                    llmInference.generateResponseAsync(prompt, (partialResult, done) -> {
+                        if (cancelRequested.get() || !targetRequestId.equals(activeRequestId)) {
+                            return;
+                        }
+                        try {
+                            JSONObject ev = new JSONObject();
+                            ev.put("requestId", targetRequestId);
+                            ev.put("chunk", partialResult != null ? partialResult : "");
+                            ev.put("done", done);
+                            jsEmitter.emit("onLocalLlmToken", ev.toString());
+                        } catch (Exception ignored) {}
+                        if (done) {
+                            synchronized (runtimeLock) {
+                                if (targetRequestId.equals(activeRequestId)) {
+                                    activeRequestId = null;
+                                }
+                            }
+                        }
+                    });
                 }
             } catch (Throwable t) {
                 try {
-                    JSONObject ev = new JSONObject();
-                    ev.put("requestId", requestId);
-                    ev.put("error", t.getMessage() != null ? t.getMessage() : "Local inference failure");
-                    jsEmitter.emit("onLocalLlmToken", ev.toString());
+                    if (!cancelRequested.get() && targetRequestId.equals(activeRequestId)) {
+                        JSONObject ev = new JSONObject();
+                        ev.put("requestId", targetRequestId);
+                        ev.put("error", t.getMessage() != null ? t.getMessage() : "Local inference failure");
+                        jsEmitter.emit("onLocalLlmToken", ev.toString());
+                    }
                 } catch (Exception ignored) {}
-                activeRequestId = null;
+                synchronized (runtimeLock) {
+                    if (targetRequestId.equals(activeRequestId)) {
+                        activeRequestId = null;
+                    }
+                }
             }
         });
         return true;
     }
 
     public void cancelGeneration() {
-        cancelRequested.set(true);
-        activeRequestId = null;
+        synchronized (runtimeLock) {
+            cancelRequested.set(true);
+            activeRequestId = null;
+        }
     }
 
     public String getRuntimeStateJson() {
