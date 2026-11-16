@@ -39,8 +39,8 @@ const AVAILABLE_MODELS: ModelInfo[] = [
     description: 'Primary multimodal reasoning model for fast everyday assistance.',
   },
   {
-    id: 'gemini-3.1-flash-lite',
-    name: 'Gemini 3.1 Flash-Lite',
+    id: 'gemini-3.8-flash',
+    name: 'Gemini 3.8 Flash',
     provider: 'Cloud Gemini',
     latency: '~160ms TTFT',
     speedRating: 'Fastest',

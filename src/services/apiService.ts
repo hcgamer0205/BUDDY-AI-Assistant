@@ -310,7 +310,12 @@ function buildRequestHeaders(extraHeaders?: HeadersInit, isJsonBody = false, acc
 
 function buildEndpointUrl(endpoint: string): { url: string; baseUrl: string } {
   const isNative = detectNativePlatform(typeof window !== 'undefined' ? window : undefined);
-  const baseUrl = getApiBaseUrl();
+  let baseUrl = getApiBaseUrl();
+
+  if (baseUrl && isAiStudioPreviewUrl(baseUrl) && !isNative) {
+    writeStorage(STORAGE_KEY_BACKEND_URL, '');
+    baseUrl = '';
+  }
 
   if (isNative && !baseUrl) {
     const err = new GatewayHttpError(

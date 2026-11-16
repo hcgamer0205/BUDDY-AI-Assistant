@@ -456,7 +456,8 @@ export default function App() {
           <div className="min-w-0">
             <h1 className="text-sm font-bold tracking-wider text-white leading-tight flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
-              BUDDY
+              <span>BUDDY</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">🇮🇳 SOVEREIGN</span>
             </h1>
             <div className="flex items-center gap-1.5 text-[11px] text-emerald-300/80">
               <span className={`w-1.5 h-1.5 rounded-full ${headerStatusDot}`} />

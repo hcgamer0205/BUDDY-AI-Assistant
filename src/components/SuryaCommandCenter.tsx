@@ -105,13 +105,17 @@ export const SuryaCommandCenter: React.FC<SuryaCommandCenterProps> = ({
 
   return (
     <div className="w-full max-w-md mx-auto px-4 pt-3 pb-24 flex flex-col items-center space-y-5 select-none">
-      {/* Friendly Greeting in Clean Modern Typography */}
-      <div className="text-center space-y-1">
+      {/* India Sovereign AI Badge & Greeting */}
+      <div className="text-center space-y-2 w-full">
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full buddy-india-badge text-[11px] font-semibold text-emerald-200 tracking-wider">
+          <span className="text-sm">🇮🇳</span>
+          <span>INDIA'S SOVEREIGN AI • MADE IN INDIA</span>
+        </div>
         <h2 className="text-2xl font-bold tracking-tight text-white flex items-center justify-center gap-2">
-          <span>{getGreeting()}</span>
+          <span className="buddy-gradient-title">{getGreeting()}</span>
         </h2>
         <p className="text-xs text-emerald-300/80 tracking-wide font-medium">
-          BUDDY AI Operating Environment Ready
+          BUDDY Intelligent Operating Environment & Neural Voice Core
         </p>
       </div>
 

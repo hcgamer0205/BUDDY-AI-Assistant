@@ -186,7 +186,7 @@ const AVAILABLE_AI_MODELS: AIModelMeta[] = [
     latencyRating: 5,
   },
   {
-    id: 'gemini-3.1-flash-lite',
+    id: 'gemini-3.8-flash',
     name: 'Gemini 3.1 Flash Lite',
     description: 'Lightweight high-throughput model, lowest latency, primary overload fallback',
     speed: 'Ultra-Fast',
@@ -220,12 +220,12 @@ function getGeminiClient(): GoogleGenAI | null {
 const PRIMARY_UPSTREAM_TIMEOUT_MS = 30000;
 
 function resolveGeminiModelName(model: string): string {
-  if (!model) return 'gemini-2.5-flash';
+  if (!model) return 'gemini-3.8-flash';
   const lower = model.toLowerCase();
   if (lower.includes('argon') || lower.includes('pro')) {
-    return 'gemini-2.5-pro';
+    return 'gemini-3.8-pro';
   }
-  return 'gemini-2.5-flash';
+  return 'gemini-3.8-flash';
 }
 
 function withUpstreamTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -270,7 +270,7 @@ function shouldFallbackToLite(err: any): boolean {
 export async function generateWithFallback(
   ai: GoogleGenAI,
   params: { model: string; contents: any; config?: any },
-  fallbackModel = 'gemini-3.1-flash-lite'
+  fallbackModel = 'gemini-3.8-flash'
 ) {
   const resolvedModel = resolveGeminiModelName(params.model);
   const resolvedFallback = resolveGeminiModelName(fallbackModel);
@@ -296,7 +296,7 @@ export async function generateWithFallback(
 async function generateWithFallbackMeta(
   ai: GoogleGenAI,
   params: { model: string; contents: any; config?: any },
-  fallbackModel = 'gemini-3.1-flash-lite'
+  fallbackModel = 'gemini-3.8-flash'
 ): Promise<{ response: any; modelUsed: string; fellBack: boolean }> {
   const resolvedModel = resolveGeminiModelName(params.model);
   const resolvedFallback = resolveGeminiModelName(fallbackModel);
@@ -659,7 +659,7 @@ app.get('/api/models', (req: Request, res: Response) => {
   return res.json({
     models: AVAILABLE_AI_MODELS,
     defaultModel: 'gemini-4-hydrogen',
-    fallbackModel: 'gemini-3.1-flash-lite',
+    fallbackModel: 'gemini-3.8-flash',
     timestamp: new Date().toISOString(),
   });
 });
@@ -672,7 +672,7 @@ app.get('/api/config/api-key', (req: Request, res: Response) => {
       configured: false,
       maskedKey: null,
       model: 'gemini-4-hydrogen',
-      fallbackModel: 'gemini-3.1-flash-lite',
+      fallbackModel: 'gemini-3.8-flash',
       status: 'Awaiting API Key in Settings > Secrets',
     });
   }
@@ -682,7 +682,7 @@ app.get('/api/config/api-key', (req: Request, res: Response) => {
     configured: true,
     maskedKey,
     model: 'gemini-4-hydrogen',
-    fallbackModel: 'gemini-3.1-flash-lite',
+    fallbackModel: 'gemini-3.8-flash',
     status: 'ACTIVE_ONLINE',
   });
 });
@@ -884,7 +884,7 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
         },
       });
       const streamResponse =
-        targetModel !== 'gemini-3.1-flash-lite'
+        targetModel !== 'gemini-3.8-flash'
           ? await withUpstreamTimeout(streamInitPromise, PRIMARY_UPSTREAM_TIMEOUT_MS, `Stream ${targetModel}`)
           : await streamInitPromise;
 
@@ -893,7 +893,7 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
         if (clientDisconnected) break;
         const nextPromise = iterator.next();
         const step =
-          firstTokenTime === null && targetModel !== 'gemini-3.1-flash-lite'
+          firstTokenTime === null && targetModel !== 'gemini-3.8-flash'
             ? await withUpstreamTimeout(nextPromise, PRIMARY_UPSTREAM_TIMEOUT_MS, `First chunk ${targetModel}`)
             : await nextPromise;
         if (step.done) break;
@@ -909,8 +909,8 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
         }
       }
 
-      if (tokenCount === 0 && !clientDisconnected && autoFallback && targetModel !== 'gemini-3.1-flash-lite') {
-        const fallbackTarget = 'gemini-3.1-flash-lite';
+      if (tokenCount === 0 && !clientDisconnected && autoFallback && targetModel !== 'gemini-3.8-flash') {
+        const fallbackTarget = 'gemini-3.8-flash';
         sendSSE({
           type: 'fallback',
           originalModel: targetModel,
@@ -923,10 +923,10 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
       return true;
     } catch (err: any) {
       console.warn(`[SURYA Stream] Error on model ${targetModel}:`, err?.message || err);
-      const canFallback = shouldFallbackToLite(err) && autoFallback && targetModel !== 'gemini-3.1-flash-lite';
+      const canFallback = shouldFallbackToLite(err) && autoFallback && targetModel !== 'gemini-3.8-flash';
 
       if (canFallback) {
-        const fallbackTarget = 'gemini-3.1-flash-lite';
+        const fallbackTarget = 'gemini-3.8-flash';
         sendSSE({
           type: 'fallback',
           originalModel: targetModel,
@@ -1014,7 +1014,7 @@ app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
     let activeModel = model;
     let responseText = '';
 
-    if (autoFallback && activeModel !== 'gemini-3.1-flash-lite') {
+    if (autoFallback && activeModel !== 'gemini-3.8-flash') {
       const meta = await generateWithFallbackMeta(
         ai,
         {
@@ -1022,7 +1022,7 @@ app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
           contents,
           config: { systemInstruction },
         },
-        'gemini-3.1-flash-lite'
+        'gemini-3.8-flash'
       );
       activeModel = meta.modelUsed;
       responseText = meta.response?.text || '';
@@ -1383,7 +1383,7 @@ app.get('/api/health', (req: Request, res: Response) => {
     geminiConfigured: Boolean(apiKey),
     authRequired: Boolean(getConfiguredApiToken()),
     activeModel: 'gemini-4-hydrogen',
-    fallbackModel: 'gemini-3.1-flash-lite',
+    fallbackModel: 'gemini-3.8-flash',
     memoryRssMb: Math.round(memUsage.rss / (1024 * 1024)),
     worldModelEntries: personalWorldModel.length,
     auditLogsCount: veronicaAuditLogs.length,
