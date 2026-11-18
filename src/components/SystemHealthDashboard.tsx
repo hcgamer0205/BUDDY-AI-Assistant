@@ -21,10 +21,12 @@ import {
   FileCheck,
   Radio,
   Info,
+  ExternalLink,
+  ListChecks,
 } from 'lucide-react';
 import { SystemHealthData, UpdateInfo, DeviceTelemetry } from '../types/surya';
 import { apiService, ConnectionStatusSnapshot, ConnectionState } from '../services/apiService';
-import { deviceBridgeService } from '../services/deviceBridgeService';
+import { deviceBridgeService, GEMINI_API_KEY_URL } from '../services/deviceBridgeService';
 import { wakeWordService, WakeWordState } from '../services/wakeWordService';
 import { voiceProfileManager } from '../services/voiceProfileManager';
 import { uiThemeEngine } from '../services/uiThemeEngine';
@@ -70,8 +72,10 @@ interface SystemHealthDashboardProps {
 const STATE_LABELS: Record<ConnectionState, { label: string; dot: string; text: string }> = {
   CONNECTED: { label: 'Connected', dot: 'bg-emerald-400', text: 'text-emerald-300' },
   CONNECTING: { label: 'Connecting', dot: 'bg-amber-400', text: 'text-amber-300' },
-  DISCONNECTED: { label: 'Offline', dot: 'bg-rose-400', text: 'text-rose-300' },
-  AUTHENTICATION_REQUIRED: { label: 'Auth Required', dot: 'bg-amber-400', text: 'text-amber-200' },
+  DISCONNECTED: { label: 'Disconnected', dot: 'bg-slate-400', text: 'text-slate-300' },
+  TIMEOUT: { label: 'Timeout', dot: 'bg-amber-400', text: 'text-amber-300' },
+  UNAVAILABLE: { label: 'Server Unavailable', dot: 'bg-rose-400', text: 'text-rose-300' },
+  AUTHENTICATION_REQUIRED: { label: 'Auth Failure', dot: 'bg-amber-400', text: 'text-amber-200' },
   SERVER_ERROR: { label: 'Server Error', dot: 'bg-rose-400', text: 'text-rose-200' },
   RATE_LIMITED: { label: 'Rate Limited', dot: 'bg-orange-400', text: 'text-orange-200' },
 };
@@ -170,7 +174,7 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
 
   const handleSaveUrlOnly = () => {
     soundFx.playClick();
-    const validation = apiService.setApiBaseUrl(backendUrl);
+    const validation = apiService.setApiBaseUrl(backendUrl, { requireNonEmpty: true });
     if (!validation.valid) {
       soundFx.playAbort();
       setGatewayNotice({ text: validation.error || 'Invalid backend URL.', tone: 'err' });
@@ -184,7 +188,7 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
       setGatewayNotice({ text: `Saved with notice: ${validation.warning}`, tone: 'warn' });
     } else {
       setGatewayNotice({
-        text: 'Gateway saved. Click Test Connection to verify reachability.',
+        text: 'Gateway URL saved. Run Test Connection to verify reachability and status.',
         tone: 'info',
       });
     }
@@ -201,7 +205,9 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
       await Promise.all([loadSecurityReport(), checkUpdates()]);
       soundFx.playAuthorize();
       setGatewayNotice({
-        text: `Connected · Active model: ${data.activeModel} · Auth: ${
+        text: `Connected · Active model: ${data.activeModel}${
+          data.resolvedUpstreamModel ? ` (${data.resolvedUpstreamModel})` : ''
+        } · Gemini key: ${data.geminiConfigured ? 'Configured on Server' : 'Not Configured'} · Auth: ${
           data.authRequired ? 'Bearer Token Verified' : 'Open'
         }`,
         tone: 'ok',
@@ -331,7 +337,13 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
     }
   };
 
-  const connMeta = STATE_LABELS[connStatus.state];
+  const resolvedConnMeta =
+    !connStatus.isConfigured && connStatus.state === 'DISCONNECTED'
+      ? { label: 'Not Configured', dot: 'bg-amber-400', text: 'text-amber-300' }
+      : connStatus.lastErrorCode === 'MODEL_UNAVAILABLE'
+      ? { label: 'Model Unavailable', dot: 'bg-rose-400', text: 'text-rose-200' }
+      : STATE_LABELS[connStatus.state];
+  const connMeta = resolvedConnMeta;
   const activeVoiceProfile = voiceProfileManager.getActiveProfile();
 
   const SectionShell: React.FC<{
@@ -418,22 +430,37 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
         <OfflineModelStore />
       </SectionShell>
 
-      {/* 1. Backend & Gemini */}
+      {/* 1. Backend Server Gateway */}
       <SectionShell
         id="backend"
         icon={<Server className="w-4 h-4 text-[#60a5fa]" />}
-        title="Backend & Gemini"
+        title="Backend Server Gateway"
         summary={
           connStatus.effectiveUrl ||
-          (connStatus.isNative ? 'Backend URL setup required' : 'Same-origin /api proxy')
+          (connStatus.isNative ? 'HTTPS Backend URL required for Online AI' : 'Same-origin /api proxy')
         }
       >
         <div className="p-3 rounded-xl bg-[#0b0f17] border border-slate-800 space-y-1.5 text-xs">
           <div className="flex items-center justify-between gap-2">
+            <span className="text-slate-400">Connection Status</span>
+            <span className={`font-semibold inline-flex items-center gap-1.5 ${connMeta.text}`}>
+              <span className={`w-2 h-2 rounded-full ${connMeta.dot}`} />
+              <span>{connMeta.label}</span>
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
             <span className="text-slate-400">Gateway URL</span>
             <span className="text-slate-200 font-mono truncate max-w-[220px]">
               {connStatus.effectiveUrl ||
-                (connStatus.isNative ? 'Unconfigured' : 'Same-origin /api')}
+                (connStatus.isNative ? 'Not Configured' : 'Same-origin /api')}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-slate-400">Active Provider &amp; Model</span>
+            <span className="text-slate-200 truncate max-w-[220px]">
+              Google Gemini · {health?.activeModel || connStatus.serverModel || 'gemini-4-hydrogen'}
+              {(health?.resolvedUpstreamModel || connStatus.resolvedUpstreamModel) &&
+                ` (${health?.resolvedUpstreamModel || connStatus.resolvedUpstreamModel})`}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2">
@@ -460,10 +487,16 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
               <span>
                 {!connStatus.isConfigured
-                  ? 'Android APK Backend URL Required'
+                  ? 'Online AI Is Not Configured'
                   : connStatus.isPreviewUrl
                   ? 'AI Studio Preview URL Detected'
-                  : 'Connection Notice'}
+                  : connStatus.state === 'TIMEOUT'
+                  ? 'Backend Connection Timed Out'
+                  : connStatus.lastErrorCode === 'GEMINI_AUTH_FAILED'
+                  ? 'Gemini API Key Authentication Failure'
+                  : connStatus.lastErrorCode === 'MODEL_UNAVAILABLE'
+                  ? 'Selected AI Model Unavailable'
+                  : 'Backend Connection Notice'}
               </span>
             </div>
             {connStatus.lastError && (
@@ -476,6 +509,42 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
             )}
           </div>
         )}
+
+        {/* Get Gemini API Key & Server-Side Secret Guidance */}
+        <div className="p-3.5 rounded-xl bg-[#0b1522]/85 border border-emerald-500/25 space-y-3 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 font-semibold text-emerald-300">
+              <ListChecks className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Backend &amp; Gemini API Key Setup Guide</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                soundFx.playClick();
+                deviceBridgeService.openExternalUrl(GEMINI_API_KEY_URL);
+              }}
+              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>Get Gemini API Key</span>
+              <ExternalLink className="w-3 h-3" />
+            </button>
+          </div>
+
+          <ol className="list-decimal pl-4 space-y-1 text-[11px] text-slate-300 leading-relaxed">
+            <li>Open the official Google AI Studio page using <strong className="text-emerald-200">Get Gemini API Key</strong>.</li>
+            <li>Configure <code className="text-emerald-300 font-mono">GEMINI_API_KEY</code> as a server-side environment secret on your deployed backend.</li>
+            <li>Deploy your HTTPS backend (<code className="text-emerald-300 font-mono">server.ts</code>) to Cloud Run or your HTTPS host.</li>
+            <li>Enter the deployed HTTPS backend URL below and click <strong className="text-slate-100">Save &amp; Test</strong>.</li>
+            <li>Run a backend health check (<strong className="text-slate-100">Test</strong>) to verify <code className="text-emerald-300 font-mono">/api/health</code>.</li>
+            <li>Run a Gemini connection test (<strong className="text-slate-100">Ping Gemini</strong>) to confirm model roundtrip access.</li>
+            <li>Review the live Connection Status badge above before enabling Online AI.</li>
+          </ol>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed border-t border-slate-800/80 pt-2">
+            Security note: Never paste your Gemini API key into chat messages or embed it inside the mobile APK. API keys stay strictly on your backend server. If Google AI Studio restricts access for a minor or managed account, ask a parent, guardian, or team administrator to provision the backend secret.
+          </p>
+        </div>
 
         <div className="space-y-1.5">
           <label className="text-xs text-slate-300 block">Backend HTTPS Service Root URL</label>

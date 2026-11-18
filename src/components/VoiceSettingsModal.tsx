@@ -504,7 +504,7 @@ export const VoiceSettingsModal: React.FC<VoiceSettingsModalProps> = ({ onClose 
                 />
                 <div>
                   <span className="text-xs font-bold text-slate-200 block">"Hey BUDDY" Voice Activation</span>
-                  <span className="text-[10px] text-slate-400">Continuously listen for "Hey BUDDY" / "Hey SURYA"</span>
+                  <span className="text-[10px] text-slate-400">Continuously listen for "Hey BUDDY" wake phrase</span>
                 </div>
               </div>
               <input

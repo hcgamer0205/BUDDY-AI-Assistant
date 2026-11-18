@@ -14,10 +14,17 @@ import {
   SlidersHorizontal,
   Search,
   X,
+  ExternalLink,
+  KeyRound,
+  Wifi,
+  WifiOff,
+  Radio,
+  ShieldAlert,
 } from 'lucide-react';
 import { ChatMessage, ResponseMode, StarkActionPlan } from '../types/surya';
 import { apiService, ConnectionStatusSnapshot } from '../services/apiService';
 import { intelligenceRouter } from '../services/intelligenceRouter';
+import { deviceBridgeService, GEMINI_API_KEY_URL } from '../services/deviceBridgeService';
 import { voiceService } from '../services/voiceService';
 import { soundFx } from '../services/soundFx';
 import { uiThemeEngine } from '../services/uiThemeEngine';
@@ -35,6 +42,7 @@ interface StarkCommandCenterProps {
   onChangeResponseMode: (mode: ResponseMode) => void;
   onOpenModelModal?: () => void;
   onOpenTelemetry?: () => void;
+  onOpenOfflineSettings?: () => void;
 }
 
 export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
@@ -49,11 +57,13 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
   onChangeResponseMode,
   onOpenModelModal,
   onOpenTelemetry,
+  onOpenOfflineSettings,
 }) => {
   const [inputText, setInputText] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isTestingGateway, setIsTestingGateway] = useState(false);
   const [theme, setTheme] = useState<SuryaThemeConfig>(uiThemeEngine.getCurrentTheme());
   const [voiceState, setVoiceState] = useState(voiceService.getState());
   const [connStatus, setConnStatus] = useState<ConnectionStatusSnapshot>(
@@ -107,10 +117,28 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `surya-conversation-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `buddy-conversation-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
     setMenuOpen(false);
+  };
+
+  const handleTestGateway = async () => {
+    soundFx.playClick();
+    setIsTestingGateway(true);
+    try {
+      await apiService.checkBackendConnection();
+      soundFx.playAuthorize();
+    } catch {
+      soundFx.playAbort();
+    } finally {
+      setIsTestingGateway(false);
+    }
+  };
+
+  const handleOpenGeminiKeyPage = async () => {
+    soundFx.playClick();
+    await deviceBridgeService.openExternalUrl(GEMINI_API_KEY_URL);
   };
 
   const quickSuggestions = [
@@ -120,18 +148,46 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
     'Remember that I prefer concise replies',
   ];
 
-  const primaryCol = theme.palette.primary || '#10b981';
+  const isOfflineMode = routerStatus.mode === 'offline';
   const offlineHandledLocally =
     routerStatus.activePath === 'on-device-llm' ||
-    (routerStatus.mode === 'offline' && routerStatus.localReady);
+    (isOfflineMode && routerStatus.localReady);
+  const hasGatewayFailureState =
+    connStatus.state === 'AUTHENTICATION_REQUIRED' ||
+    connStatus.state === 'TIMEOUT' ||
+    connStatus.state === 'UNAVAILABLE' ||
+    connStatus.state === 'RATE_LIMITED' ||
+    connStatus.state === 'SERVER_ERROR' ||
+    Boolean(connStatus.lastErrorCode);
   const showGatewayBanner =
+    !isOfflineMode &&
     !offlineHandledLocally &&
-    routerStatus.mode !== 'offline' &&
-    (connStatus.state === 'AUTHENTICATION_REQUIRED' ||
-      connStatus.state === 'RATE_LIMITED' ||
-      connStatus.state === 'SERVER_ERROR' ||
-      !connStatus.isConfigured ||
-      connStatus.isPreviewUrl);
+    connStatus.state !== 'CONNECTED' &&
+    connStatus.state !== 'CONNECTING' &&
+    (!connStatus.isConfigured || connStatus.isPreviewUrl || hasGatewayFailureState);
+
+  const setupCardTitle =
+    !connStatus.isConfigured || connStatus.isPreviewUrl
+      ? 'Online AI is not configured'
+      : connStatus.state === 'TIMEOUT'
+      ? 'Backend connection timed out'
+      : connStatus.lastErrorCode === 'GEMINI_AUTH_FAILED'
+      ? 'Gemini API authentication failed'
+      : connStatus.lastErrorCode === 'MODEL_UNAVAILABLE'
+      ? 'Selected AI model unavailable'
+      : connStatus.state === 'AUTHENTICATION_REQUIRED'
+      ? 'Backend authentication required'
+      : connStatus.state === 'UNAVAILABLE'
+      ? 'Backend server unavailable'
+      : connStatus.state === 'RATE_LIMITED'
+      ? 'Backend rate limit reached'
+      : 'Online AI connection issue';
+
+  const setupCardDescription =
+    !connStatus.isConfigured || connStatus.isPreviewUrl
+      ? 'Configure your Gemini API key on your backend and connect BUDDY to its HTTPS endpoint to enable online AI.'
+      : connStatus.lastError ||
+        'Verify your backend HTTPS URL and server-side GEMINI_API_KEY configuration in Backend Server Gateway settings.';
 
   const visibleMessages = searchQuery.trim()
     ? messages.filter((m) =>
@@ -146,13 +202,15 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
         <div className="min-w-0">
           <h2 className="text-base font-semibold text-white tracking-wide">BUDDY Chat</h2>
           <p className="text-xs text-emerald-300/80 truncate">
-            {routerStatus.mode === 'offline'
+            {isOfflineMode
               ? routerStatus.localReady
-                ? `Offline · ${routerStatus.activeLocalModelName}`
-                : 'Offline mode · Local tools only'
+                ? `Offline AI · ${routerStatus.activeLocalModelName}`
+                : 'Offline Mode · Local tools active (no local model installed)'
               : routerStatus.activePath === 'on-device-llm'
-              ? `On-device · ${routerStatus.activeLocalModelName}`
-              : `${responseMode === 'concise' ? 'Concise' : 'Detailed'} · ${routerStatus.mode}`}
+              ? `On-Device · ${routerStatus.activeLocalModelName}`
+              : `Cloud Gemini · ${activeModel}${
+                  connStatus.resolvedUpstreamModel ? ` (${connStatus.resolvedUpstreamModel})` : ''
+                }`}
           </p>
         </div>
 
@@ -311,22 +369,97 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
         </div>
       )}
 
-      {/* Actionable Gateway Banner when needed */}
-      {showGatewayBanner && (
-        <div className="mt-3 px-3.5 py-2.5 rounded-xl bg-amber-950/35 border border-amber-500/30 text-xs text-amber-100 flex flex-wrap items-center justify-between gap-2">
-          <span className="flex-1 min-w-[200px]">
-            {connStatus.lastError ||
-              `Connection issue (${connStatus.state.toLowerCase().replace(/_/g, ' ')}). Check Backend Settings.`}
-          </span>
-          {onOpenTelemetry && (
+      {/* Offline AI Status Card when in Offline Mode */}
+      {isOfflineMode && (
+        <div className="mt-3 p-3.5 rounded-2xl bg-[#0b1522]/90 backdrop-blur-xl border border-emerald-500/25 shadow-lg flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-start gap-2.5 min-w-0 flex-1">
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-0.5">
+              {routerStatus.localReady ? (
+                <Radio className="w-4 h-4 text-emerald-400" />
+              ) : (
+                <WifiOff className="w-4 h-4 text-amber-400" />
+              )}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-emerald-200">
+                {routerStatus.localReady
+                  ? `Offline AI Ready · ${routerStatus.activeLocalModelName}`
+                  : 'Offline Mode · Local AI Model Not Installed'}
+              </p>
+              <p className="text-[11px] text-slate-400 leading-relaxed mt-0.5">
+                {routerStatus.localReady
+                  ? 'Running 100% on-device. Online Gemini requests are disabled in Offline mode.'
+                  : 'Local commands, tasks, notes, and Knowledge Vault work offline. Install & load an offline model for on-device chat.'}
+              </p>
+            </div>
+          </div>
+          {!routerStatus.localReady && onOpenOfflineSettings && (
             <button
               type="button"
-              onClick={onOpenTelemetry}
-              className="px-3 py-1.5 rounded-lg bg-[#d4a84f] text-slate-950 font-medium text-xs shrink-0"
+              onClick={() => {
+                soundFx.playClick();
+                onOpenOfflineSettings();
+              }}
+              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs shrink-0 cursor-pointer"
             >
-              Open Settings
+              Open Offline AI Settings
             </button>
           )}
+        </div>
+      )}
+
+      {/* Actionable Emerald Cybernetic Online AI Setup / Error Card */}
+      {showGatewayBanner && (
+        <div className="mt-3 p-4 rounded-2xl bg-[#0b1522]/92 backdrop-blur-xl border border-emerald-500/30 shadow-xl space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/35 flex items-center justify-center shrink-0">
+              <ShieldAlert className="w-4 h-4 text-amber-400" />
+            </div>
+            <div className="min-w-0 flex-1 space-y-1">
+              <h3 className="text-xs font-bold text-white tracking-wide">{setupCardTitle}</h3>
+              <p className="text-xs text-slate-300 leading-relaxed">{setupCardDescription}</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenGeminiKeyPage}
+              className="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>Get Gemini API Key</span>
+              <ExternalLink className="w-3 h-3" />
+            </button>
+
+            {onOpenTelemetry && (
+              <button
+                type="button"
+                onClick={() => {
+                  soundFx.playClick();
+                  onOpenTelemetry();
+                }}
+                className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#070d14] hover:bg-slate-800 border border-emerald-500/30 text-emerald-200 font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Settings className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Configure Backend URL</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleTestGateway}
+              disabled={isTestingGateway}
+              className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#070d14] hover:bg-slate-800 border border-slate-700 text-slate-200 font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              {isTestingGateway ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-400" />
+              ) : (
+                <Wifi className="w-3.5 h-3.5 text-teal-400" />
+              )}
+              <span>{isTestingGateway ? 'Testing...' : 'Test Connection'}</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -360,25 +493,39 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
               >
                 <div className="whitespace-pre-wrap">{msg.content || '...'}</div>
 
-                {isSystem &&
+                {!isOfflineMode &&
+                  isSystem &&
                   (msg.content.includes('BUDDY Backend Error') ||
                     msg.content.includes('SURYA Backend Error') ||
                     msg.content.includes('HTML webpage') ||
-                    msg.content.includes('Network connection failed') ||
+                    msg.content.includes('Server unavailable') ||
                     msg.content.includes('not configured') ||
                     msg.content.includes('authentication failed') ||
+                    msg.content.includes('Gemini API') ||
                     msg.content.includes('Rate limit') ||
                     msg.content.includes('cookie challenge') ||
-                    msg.content.includes('timed out')) &&
-                  onOpenTelemetry && (
-                    <button
-                      type="button"
-                      onClick={onOpenTelemetry}
-                      className="mt-2.5 px-3 py-1.5 rounded-xl bg-emerald-500 text-slate-950 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-md"
-                    >
-                      <Settings className="w-3.5 h-3.5" />
-                      <span>Configure Backend Gateway</span>
-                    </button>
+                    msg.content.includes('timed out')) && (
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleOpenGeminiKeyPage}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+                      >
+                        <KeyRound className="w-3.5 h-3.5" />
+                        <span>Get Gemini API Key</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </button>
+                      {onOpenTelemetry && (
+                        <button
+                          type="button"
+                          onClick={onOpenTelemetry}
+                          className="px-3 py-1.5 rounded-xl bg-[#070d14] border border-emerald-500/30 text-emerald-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Settings className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Configure Backend URL</span>
+                        </button>
+                      )}
+                    </div>
                   )}
 
                 {msg.suggestedAction && (

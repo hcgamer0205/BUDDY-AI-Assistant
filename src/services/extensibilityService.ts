@@ -1,7 +1,7 @@
 /**
- * SURYA Universal Extensibility & Natural Language Customization Engine
+ * BUDDY Universal Extensibility & Natural Language Customization Engine
  * Interprets user directives to add integrations, create new apps, build custom skills,
- * and dynamically customize the SURYA platform interface.
+ * and dynamically customize the BUDDY platform interface.
  */
 
 import { ExtensibilityPlan, GeneratedApp, PluginItem, CustomSkill, ThemeConfig } from '../types/surya';
@@ -26,23 +26,23 @@ export class ExtensibilityService {
       let templateType = 'custom';
 
       if (lower.includes('youtube') || lower.includes('video') || lower.includes('streaming')) {
-        appName = 'SuryaTube — Video Sharing Platform';
+        appName = 'BuddyTube — Video Sharing Platform';
         category = 'Entertainment';
         templateType = 'youtube';
       } else if (lower.includes('music') || lower.includes('spotify') || lower.includes('audio') || lower.includes('player')) {
-        appName = 'SolarBeats — Audio & Music Hub';
+        appName = 'BuddyBeats — Audio & Music Hub';
         category = 'Entertainment';
         templateType = 'music';
       } else if (lower.includes('note') || lower.includes('journal') || lower.includes('memo') || lower.includes('todo') || lower.includes('task')) {
-        appName = 'SuryaNotes — Tactical Notes & Task Board';
+        appName = 'BuddyNotes — Notes & Task Board';
         category = 'Productivity';
         templateType = 'notes';
       } else if (lower.includes('finance') || lower.includes('money') || lower.includes('budget') || lower.includes('crypto')) {
-        appName = 'SolarVault — Personal Finance & Asset Tracker';
+        appName = 'BuddyVault — Personal Finance & Asset Tracker';
         category = 'Productivity';
         templateType = 'finance';
       } else if (lower.includes('chat') || lower.includes('bot') || lower.includes('ai')) {
-        appName = 'SuryaBot Studio — Conversational AI Workspace';
+        appName = 'BuddyBot Studio — Conversational AI Workspace';
         category = 'AI Services';
         templateType = 'chatbot';
       }
@@ -57,7 +57,7 @@ export class ExtensibilityService {
           category,
           templateType,
         },
-        summary: `SURYA will generate a fully functional application (${appName}) with live interactive preview, source code files, and export options.`,
+        summary: `BUDDY will generate a fully functional application (${appName}) with live interactive preview, source code files, and export options.`,
         requiresConfirmation: false,
       };
     }
@@ -97,7 +97,7 @@ export class ExtensibilityService {
         title: `Configure Integration: ${pluginName}`,
         targetId: pluginId,
         parameters: { pluginId, pluginName },
-        summary: `Connect ${pluginName} to SURYA for automated workflows, API tools, and real-time synchronization.`,
+        summary: `Connect ${pluginName} to BUDDY for automated workflows, API tools, and real-time synchronization.`,
         requiresConfirmation: true,
       };
     }
@@ -117,7 +117,7 @@ export class ExtensibilityService {
           skillName,
           instructions: `Specialized skill directive for ${skillName}.`,
         },
-        summary: `Register a persistent custom capability skill into SURYA's active capability registry.`,
+        summary: `Register a persistent custom capability skill into BUDDY's active capability registry.`,
         requiresConfirmation: false,
       };
     }
@@ -141,7 +141,7 @@ export class ExtensibilityService {
         title: `Apply Custom Theme: ${targetColor.toUpperCase()}`,
         targetId: targetColor,
         parameters: { primaryColor: targetColor },
-        summary: `Instant UI transformation: adjust SURYA's palette to ${targetColor.toUpperCase()} with dynamic neon accents.`,
+        summary: `Instant UI transformation: adjust BUDDY's palette to ${targetColor.toUpperCase()} with dynamic neon accents.`,
         requiresConfirmation: false,
       };
     }

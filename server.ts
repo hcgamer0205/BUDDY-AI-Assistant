@@ -55,7 +55,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
   if (req.method === 'OPTIONS') {
     if (origin && !isAllowedOrigin(origin)) {
-      return res.status(403).json({ error: 'Origin not permitted by SURYA CORS policy.' });
+      return res.status(403).json({ error: 'Origin not permitted by BUDDY CORS policy.' });
     }
     return res.sendStatus(204);
   }
@@ -128,7 +128,7 @@ function requireApiAuth(req: Request, res: Response, next: NextFunction) {
 
   if (!bearer) {
     return res.status(401).json({
-      error: 'Authentication required. Configure your SURYA Access Token in System Settings.',
+      error: 'Authentication required. Configure your BUDDY Access Token in System Settings.',
       code: 'AUTHENTICATION_REQUIRED',
     });
   }
@@ -137,7 +137,7 @@ function requireApiAuth(req: Request, res: Response, next: NextFunction) {
   const providedBuf = Buffer.from(bearer, 'utf-8');
   if (expectedBuf.length !== providedBuf.length || !crypto.timingSafeEqual(expectedBuf, providedBuf)) {
     return res.status(403).json({
-      error: 'Access denied. Invalid SURYA Access Token.',
+      error: 'Access denied. Invalid BUDDY Access Token.',
       code: 'INVALID_CREDENTIALS',
     });
   }
@@ -187,7 +187,7 @@ const AVAILABLE_AI_MODELS: AIModelMeta[] = [
   },
   {
     id: 'gemini-3.8-flash',
-    name: 'Gemini 3.1 Flash Lite',
+    name: 'Gemini 3.8 Flash',
     description: 'Lightweight high-throughput model, lowest latency, primary overload fallback',
     speed: 'Ultra-Fast',
     latencyRating: 5,
@@ -219,13 +219,90 @@ function getGeminiClient(): GoogleGenAI | null {
 
 const PRIMARY_UPSTREAM_TIMEOUT_MS = 30000;
 
-function resolveGeminiModelName(model: string): string {
-  if (!model) return 'gemini-3.8-flash';
-  const lower = model.toLowerCase();
-  if (lower.includes('argon') || lower.includes('pro')) {
-    return 'gemini-3.8-pro';
+const MODEL_ALIAS_MAP: Record<string, string> = {
+  'gemini-4-hydrogen': 'gemini-3.8-flash',
+  'gemini-4-carbon': 'gemini-3.8-flash',
+  'gemini-4-argon': 'gemini-3.8-pro',
+  'gemini-3.8-flash': 'gemini-3.8-flash',
+  'gemini-3.8-pro': 'gemini-3.8-pro',
+  'gemini-3.1-flash-lite': 'gemini-3.8-flash',
+  'gemini-2.5-flash': 'gemini-3.8-flash',
+  'gemini-2.5-pro': 'gemini-3.8-pro',
+  'gemini-2.0-flash': 'gemini-3.8-flash',
+  'gemini-1.5-flash': 'gemini-3.8-flash',
+  'gemini-1.5-pro': 'gemini-3.8-pro',
+};
+
+export function resolveGeminiModelName(model: string): string {
+  if (!model || typeof model !== 'string') return 'gemini-3.8-flash';
+  const cleaned = model.trim().toLowerCase();
+  if (!cleaned) return 'gemini-3.8-flash';
+  if (MODEL_ALIAS_MAP[cleaned]) {
+    return MODEL_ALIAS_MAP[cleaned];
   }
-  return 'gemini-3.8-flash';
+  return model.trim();
+}
+
+export function classifyGeminiUpstreamError(err: any): {
+  status: number;
+  code: 'GEMINI_AUTH_FAILED' | 'MODEL_UNAVAILABLE' | 'RATE_LIMITED' | 'TIMEOUT' | 'SERVER_ERROR';
+  message: string;
+} {
+  const rawMsg = String(err?.message || err || '');
+  const lower = rawMsg.toLowerCase();
+  const status = typeof err?.status === 'number' ? err.status : 0;
+
+  if (
+    status === 401 ||
+    status === 403 ||
+    lower.includes('api_key_invalid') ||
+    lower.includes('api key not valid') ||
+    lower.includes('permission_denied') ||
+    lower.includes('unauthorized')
+  ) {
+    return {
+      status: 401,
+      code: 'GEMINI_AUTH_FAILED',
+      message:
+        'Gemini API key authentication failed on the backend. Verify your server GEMINI_API_KEY configuration in your deployment secrets.',
+    };
+  }
+
+  if (
+    status === 404 ||
+    lower.includes('not_found') ||
+    lower.includes('is no longer available') ||
+    lower.includes('is not found for api version')
+  ) {
+    return {
+      status: 404,
+      code: 'MODEL_UNAVAILABLE',
+      message:
+        'Selected Gemini model is unavailable or retired upstream. Switch to Gemini 4 Hydrogen (gemini-3.8-flash) in the Model Selector.',
+    };
+  }
+
+  if (status === 429 || lower.includes('429') || lower.includes('resourceexhausted')) {
+    return {
+      status: 429,
+      code: 'RATE_LIMITED',
+      message: 'Gemini API rate limit reached upstream. Retry shortly.',
+    };
+  }
+
+  if (err?.isTimeout || status === 504 || lower.includes('timed out')) {
+    return {
+      status: 504,
+      code: 'TIMEOUT',
+      message: 'Upstream Gemini request timed out.',
+    };
+  }
+
+  return {
+    status: status === 503 ? 503 : 502,
+    code: 'SERVER_ERROR',
+    message: sanitizeContent(rawMsg || 'Upstream Gemini AI service error.'),
+  };
 }
 
 function withUpstreamTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -286,7 +363,7 @@ export async function generateWithFallback(
     return await ai.models.generateContent(actualParams);
   } catch (err: any) {
     if (shouldFallbackToLite(err) && resolvedModel !== resolvedFallback) {
-      console.warn(`[SURYA Gemini] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
+      console.warn(`[BUDDY Gemini] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
       return await ai.models.generateContent({ ...actualParams, model: resolvedFallback });
     }
     throw err;
@@ -313,7 +390,7 @@ async function generateWithFallbackMeta(
     return { response, modelUsed: params.model, fellBack: false };
   } catch (err: any) {
     if (shouldFallbackToLite(err) && resolvedModel !== resolvedFallback) {
-      console.warn(`[SURYA Gemini] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
+      console.warn(`[BUDDY Gemini] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
       const response = await ai.models.generateContent({ ...actualParams, model: resolvedFallback });
       return { response, modelUsed: fallbackModel, fellBack: true };
     }
@@ -405,7 +482,7 @@ if (personalWorldModel.length === 0) {
       id: 'mem_4',
       category: 'context',
       key: 'target_platform',
-      value: 'SURYA Android Mobile Assistant (SDK 36, Capacitor 7, Java 21)',
+      value: 'BUDDY Android Mobile Assistant (SDK 36, Capacitor 8, Java 21)',
       confidence: 0.95,
       updatedAt: new Date().toISOString(),
     },
@@ -476,7 +553,7 @@ if (veronicaAuditLogs.length === 0) {
       action: 'System Boot & Telemetry Probe',
       riskLevel: 'LOW',
       status: 'EXECUTED',
-      details: 'SURYA mobile core online with multilingual streaming engine',
+      details: 'BUDDY mobile core online with multilingual streaming engine',
       actor: 'SYSTEM',
     },
   ];
@@ -692,7 +769,8 @@ app.post('/api/config/api-key/verify', async (req: Request, res: Response) => {
   if (!ai) {
     return res.status(503).json({
       success: false,
-      error: 'GEMINI_API_KEY environment variable is not configured on the server.',
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'GEMINI_API_KEY environment variable is not configured on the backend server.',
     });
   }
 
@@ -700,9 +778,9 @@ app.post('/api/config/api-key/verify', async (req: Request, res: Response) => {
     const startTime = Date.now();
     const { response, modelUsed, fellBack } = await generateWithFallbackMeta(ai, {
       model: 'gemini-4-hydrogen',
-      contents: 'Reply concisely in under 8 words confirming you are active for SURYA gateway verification.',
+      contents: 'Reply concisely in under 8 words confirming you are active for BUDDY gateway verification.',
       config: {
-        systemInstruction: 'You are SURYA backend health verification. Reply briefly confirming status.',
+        systemInstruction: 'You are BUDDY backend health verification. Reply briefly confirming status.',
       },
     });
     const latencyMs = Date.now() - startTime;
@@ -716,15 +794,17 @@ app.post('/api/config/api-key/verify', async (req: Request, res: Response) => {
     return res.json({
       success: true,
       model: modelUsed,
+      resolvedUpstreamModel: resolveGeminiModelName(modelUsed),
       fallbackUsed: fellBack,
       latencyMs,
       response: sanitizeContent(text),
     });
   } catch (error: any) {
-    const status = error?.status === 429 ? 429 : error?.status === 503 ? 503 : 502;
-    return res.status(status).json({
+    const classified = classifyGeminiUpstreamError(error);
+    return res.status(classified.status).json({
       success: false,
-      error: sanitizeContent(error?.message || 'Failed to verify Gemini API connection upstream.'),
+      code: classified.code,
+      error: classified.message,
     });
   }
 });
@@ -745,10 +825,10 @@ function buildSystemInstruction(
       .map((m) => `[USER_${(m.category || 'context').toUpperCase()}] ${sanitizeContent(m.key)}: ${sanitizeContent(m.value)}`),
   ].join('\n');
 
-  let instruction = `You are SURYA (Solar Universal Responsive & Yielding Assistant), a refined, intelligent personal AI operating companion for Android inspired by the poise and competence of an executive engineering companion.
+  let instruction = `You are BUDDY, India's sovereign personal AI operating companion for Android and Web, designed for poise, clarity, and technical competence.
 
 Core Identity & Behavioral Directives:
-1. SURYADEV PERSONALITY: Speak with calm authority, clarity, subtle warmth, and zero filler. Never roleplay fake sensor readings or claim an unexecuted device action succeeded.
+1. BUDDY PERSONALITY: Speak with calm authority, clarity, subtle warmth, and zero filler. Never roleplay fake sensor readings or claim an unexecuted device action succeeded.
 2. MULTILINGUAL INTELLIGENCE:
    - Fluently understand and respond in Hindi (हिन्दी), English, and natural Hinglish, as well as Indian regional languages (Bengali, Telugu, Marathi, Tamil, Gujarati, Kannada, Malayalam, Punjabi, Odia, Urdu, Sanskrit) and major global languages.
    - Mirror the user's language and script unless instructed otherwise.
@@ -759,7 +839,7 @@ Core Identity & Behavioral Directives:
 Authorized Personal World Model Context:
 ${combinedMemories}
 
-Platform: SURYA Android Mobile (SDK 36, Java 21)
+Platform: BUDDY Android Mobile (SDK 36, Java 21)
 Local Time: ${new Date().toLocaleTimeString()}`;
 
   if (deviceContext && typeof deviceContext === 'object') {
@@ -816,7 +896,8 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
   const ai = getGeminiClient();
   if (!ai) {
     return res.status(503).json({
-      error: 'Gemini AI service unavailable. Please configure GEMINI_API_KEY in Settings > Secrets.',
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'Gemini AI service unavailable. Configure GEMINI_API_KEY on your deployed backend server.',
     });
   }
 
@@ -922,7 +1003,7 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
       }
       return true;
     } catch (err: any) {
-      console.warn(`[SURYA Stream] Error on model ${targetModel}:`, err?.message || err);
+      console.warn(`[BUDDY Stream] Error on model ${targetModel}:`, sanitizeContent(String(err?.message || err)));
       const canFallback = shouldFallbackToLite(err) && autoFallback && targetModel !== 'gemini-3.8-flash';
 
       if (canFallback) {
@@ -931,30 +1012,35 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
           type: 'fallback',
           originalModel: targetModel,
           fallbackModel: fallbackTarget,
-          reason: 'Primary model delayed or overloaded. Seamlessly routing to Flash Lite.',
+          reason: 'Primary model delayed or overloaded. Seamlessly routing to Gemini 3.8 Flash.',
         });
         activeModel = fallbackTarget;
         return await streamFromModel(fallbackTarget);
       } else {
+        const classified = classifyGeminiUpstreamError(err);
         sendSSE({
           type: 'error',
-          error: sanitizeContent(err?.message || 'Error occurred during AI generation.'),
+          code: classified.code,
+          error: classified.message,
         });
         return false;
       }
     }
   };
 
-  await streamFromModel(activeModel);
+  const succeeded = await streamFromModel(activeModel);
 
-  const totalTimeMs = Date.now() - startTime;
-  sendSSE({
-    type: 'done',
-    model: activeModel,
-    totalTimeMs,
-    firstTokenMs: firstTokenTime || totalTimeMs,
-    tokenCount,
-  });
+  if (succeeded) {
+    const totalTimeMs = Date.now() - startTime;
+    sendSSE({
+      type: 'done',
+      model: activeModel,
+      resolvedUpstreamModel: resolveGeminiModelName(activeModel),
+      totalTimeMs,
+      firstTokenMs: firstTokenTime || totalTimeMs,
+      tokenCount,
+    });
+  }
 
   res.end();
 });
@@ -980,7 +1066,8 @@ app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
   const ai = getGeminiClient();
   if (!ai) {
     return res.status(503).json({
-      error: 'Gemini AI service unavailable. Please check GEMINI_API_KEY in Settings > Secrets.',
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'Gemini AI service unavailable. Configure GEMINI_API_KEY in your backend server environment.',
     });
   }
 
@@ -1049,16 +1136,17 @@ app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error: any) {
-    const status = error?.status === 429 ? 429 : error?.status === 503 ? 503 : 502;
-    return res.status(status).json({
-      error: sanitizeContent(error?.message || 'Error processing AI chat response upstream.'),
+    const classified = classifyGeminiUpstreamError(error);
+    return res.status(classified.status).json({
+      code: classified.code,
+      error: classified.message,
     });
   }
 });
 
 // 5. Standard Optics Multimodal Scene Analysis Endpoint
 app.post('/api/vision', visionLimiter, async (req: Request, res: Response) => {
-  const { imageBase64, prompt = 'Analyze this scene through SURYA Standard Optics HUD. Identify key objects, structural elements, read any visible text, assess distance/proximity estimates benignly, and provide tactical telemetry points.' } = req.body;
+  const { imageBase64, prompt = 'Analyze this scene through BUDDY Standard Optics HUD. Identify key objects, structural elements, read any visible text, assess distance/proximity estimates benignly, and provide telemetry points.' } = req.body;
 
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     return res.status(400).json({ error: 'Valid image base64 data is required for optical telemetry.' });
@@ -1087,7 +1175,7 @@ app.post('/api/vision', visionLimiter, async (req: Request, res: Response) => {
             },
           },
           {
-            text: `You are SURYA Standard Optics AR HUD visual processor.
+            text: `You are BUDDY Standard Optics AR HUD visual processor.
 ${prompt}
 Format your findings with clean, structured sections:
 1. OPTICAL SUMMARY: 1-2 concise sentences describing the field of view.
@@ -1377,12 +1465,15 @@ app.get('/api/health', (req: Request, res: Response) => {
 
   return res.json({
     status: 'ONLINE',
-    version: '1.3.0-SURYA-ANDROID',
+    app: 'BUDDY',
+    provider: 'Google Gemini',
+    version: '1.3.0-BUDDY-ANDROID',
     targetPlatform: 'Android SDK 36 (Java 21 / Gradle 8.11.1)',
     uptimeSeconds: Math.floor(process.uptime()),
     geminiConfigured: Boolean(apiKey),
     authRequired: Boolean(getConfiguredApiToken()),
     activeModel: 'gemini-4-hydrogen',
+    resolvedUpstreamModel: resolveGeminiModelName('gemini-4-hydrogen'),
     fallbackModel: 'gemini-3.8-flash',
     memoryRssMb: Math.round(memUsage.rss / (1024 * 1024)),
     worldModelEntries: personalWorldModel.length,
@@ -1401,12 +1492,12 @@ app.get('/api/updates/check', (req: Request, res: Response) => {
     latestVersion: '1.3.1',
     updateAvailable: true,
     releaseDate: '2026-11-07',
-    releaseNotes: 'SURYA AI: Ultra-fast real-time response streaming, multilingual Indian & international speech recognition, and dedicated local YouTube/app command router.',
+    releaseNotes: 'BUDDY AI: Ultra-fast real-time response streaming, multilingual Indian & international speech recognition, and dedicated local YouTube/app command router.',
     apkName: 'Surya-Android.apk',
-    downloadUrl: 'https://github.com/hcgamer0205/Surya-AI-Assistant/releases/download/v2.4.0/Surya-Android.apk',
+    downloadUrl: 'https://github.com/hcgamer0205/BUDDY-AI-Assistant/releases/download/v2.4.0/Surya-Android.apk',
     sha256Checksum: 'a7c9381e594d21b719d45fbe2199b4d13e51a6575191986427a136bfb683ef99',
     fileSizeMb: 18.6,
-    signingCertificate: 'SHA-256 with RSA (SURYA Secure Release Key)',
+    signingCertificate: 'SHA-256 with RSA (BUDDY Secure Release Key)',
     packageProvider: 'com.surya.assistant.fileprovider',
     minAndroidSdk: 26,
     targetAndroidSdk: 36,
@@ -1520,7 +1611,7 @@ app.post('/api/vision/analyze', visionLimiter, async (req: Request, res: Respons
       qr: 'Detect any QR codes, barcodes, URLs, product labels, or machine-readable tags visible in the image and summarize their contents.',
     };
 
-    const prompt = `You are SURYA Vision, an advanced peaceful multimodal computer vision perception system.
+    const prompt = `You are BUDDY Vision, an advanced peaceful multimodal computer vision perception system.
 Active Mode: ${sanitizeContent(String(mode))} — ${modeDirectives[String(mode)] || modeDirectives.general}
 Analyze this image frame and output a strictly valid JSON object matching this schema:
 {
@@ -1603,7 +1694,7 @@ app.post('/api/vision/chat', visionLimiter, async (req: Request, res: Response) 
     }
 
     parts.push({
-      text: `You are SURYA Vision conversational assistant. The user is looking at this camera view and asked:
+      text: `You are BUDDY Vision conversational assistant. The user is looking at this camera view and asked:
 "${sanitizeContent(question)}"
 Answer clearly, concisely, and knowledgeably, directly referencing what is visible in the scene. Explain machines, text, plants, landmarks, or electronic components as requested.`,
     });
@@ -2358,13 +2449,13 @@ export async function startServer() {
   }
 
   return app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[SURYA Mobile] Server listening on http://0.0.0.0:${PORT}`);
+    console.log(`[BUDDY Mobile] Server listening on http://0.0.0.0:${PORT}`);
   });
 }
 
 if (process.env.SURYA_SKIP_LISTEN !== '1') {
   startServer().catch((err) => {
-    console.error('[SURYA Mobile] Server boot failed:', err);
+    console.error('[BUDDY Mobile] Server boot failed:', err);
     process.exit(1);
   });
 }

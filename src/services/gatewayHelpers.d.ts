@@ -1,6 +1,7 @@
 export const STORAGE_KEY_BACKEND_URL: string;
 export const STORAGE_KEY_API_TOKEN: string;
 export const STORAGE_KEY_CLIENT_ID: string;
+export const GEMINI_API_KEY_URL: string;
 
 export type GatewayErrorCode =
   | 'UNCONFIGURED'
@@ -8,6 +9,8 @@ export type GatewayErrorCode =
   | 'HTML_RESPONSE'
   | 'INVALID_JSON'
   | 'AUTH_REQUIRED'
+  | 'GEMINI_AUTH_FAILED'
+  | 'MODEL_UNAVAILABLE'
   | 'RATE_LIMITED'
   | 'NOT_FOUND'
   | 'SERVER_ERROR'
@@ -20,6 +23,8 @@ export type ConnectionState =
   | 'DISCONNECTED'
   | 'CONNECTING'
   | 'CONNECTED'
+  | 'TIMEOUT'
+  | 'UNAVAILABLE'
   | 'AUTHENTICATION_REQUIRED'
   | 'SERVER_ERROR'
   | 'RATE_LIMITED';
@@ -54,7 +59,11 @@ export function isAiStudioPreviewUrl(rawUrl: string): boolean;
 export function normalizeBackendUrl(raw: string): string;
 export function joinApiUrl(baseUrl: string, endpoint: string): string;
 export function isLocalOrLanHost(hostname: string): boolean;
-export function validateBackendUrl(raw: string, opts?: { isNative?: boolean }): UrlValidationResult;
+export function isSafeExternalUrl(rawUrl: string): boolean;
+export function validateBackendUrl(
+  raw: string,
+  opts?: { isNative?: boolean; requireNonEmpty?: boolean }
+): UrlValidationResult;
 export function detectNativePlatform(win?: any): boolean;
 export function resolveApiBaseUrl(opts?: {
   storedUrl?: string;

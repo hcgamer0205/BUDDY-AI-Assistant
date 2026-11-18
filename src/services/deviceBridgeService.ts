@@ -1,10 +1,13 @@
 /**
- * SURYA Native & Web Device Telemetry Bridge
+ * BUDDY Native & Web Device Telemetry Bridge
  * Reads authentic Battery, Connectivity, Bluetooth Audio, Foreground Service,
- * Notification, and Permission states across Android WebView & Modern Browsers.
+ * Notification, external URL navigation, and Permission states across Android WebView & Browsers.
  */
 
 import { DeviceTelemetry, TabType } from '../types/surya';
+import { GEMINI_API_KEY_URL, isSafeExternalUrl } from './gatewayHelpers.js';
+
+export { GEMINI_API_KEY_URL };
 
 type TelemetryListener = (telemetry: DeviceTelemetry) => void;
 type DeepActionListener = (tab: TabType, action: string) => void;
@@ -207,6 +210,53 @@ class DeviceBridgeService {
         return false;
       }
     }
+    return false;
+  }
+
+  public async openExternalUrl(rawUrl: string): Promise<boolean> {
+    if (!isSafeExternalUrl(rawUrl)) {
+      return false;
+    }
+
+    if (typeof window === 'undefined') {
+      return false;
+    }
+
+    // 1. Prefer Capacitor Browser plugin if installed/registered
+    const capBrowser = (window as any).Capacitor?.Plugins?.Browser;
+    if (capBrowser && typeof capBrowser.open === 'function') {
+      try {
+        await capBrowser.open({ url: rawUrl });
+        return true;
+      } catch {
+        // Fall through to Android bridge or anchor fallback
+      }
+    }
+
+    // 2. Native Android WebView bridge -> external browser via ACTION_VIEW
+    const bridge = (window as any).AndroidSuryaBridge;
+    if (bridge && typeof bridge.launchIntent === 'function') {
+      try {
+        const opened = Boolean(bridge.launchIntent('android.intent.action.VIEW', rawUrl, ''));
+        if (opened) return true;
+      } catch {
+        // Fall through to anchor fallback
+      }
+    }
+
+    // 3. Safe web anchor navigation (avoids window.open popup/iFrame issues & prevents opener leaks)
+    if (typeof document !== 'undefined') {
+      const link = document.createElement('a');
+      link.href = rawUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return true;
+    }
+
     return false;
   }
 }

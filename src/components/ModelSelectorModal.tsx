@@ -33,15 +33,15 @@ const AVAILABLE_MODELS: ModelInfo[] = [
   {
     id: 'gemini-4-hydrogen',
     name: 'Gemini 4 Hydrogen',
-    provider: 'Cloud Gemini',
+    provider: 'Cloud Gemini · gemini-3.8-flash',
     latency: '~260ms TTFT',
     speedRating: 'High Performance',
-    description: 'Primary multimodal reasoning model for fast everyday assistance.',
+    description: 'Primary multimodal reasoning alias resolved to gemini-3.8-flash on the BUDDY backend.',
   },
   {
     id: 'gemini-3.8-flash',
     name: 'Gemini 3.8 Flash',
-    provider: 'Cloud Gemini',
+    provider: 'Cloud Gemini · gemini-3.8-flash',
     latency: '~160ms TTFT',
     speedRating: 'Fastest',
     description: 'Low-latency lightweight cloud model with automatic fallback.',
@@ -49,18 +49,18 @@ const AVAILABLE_MODELS: ModelInfo[] = [
   {
     id: 'gemini-4-argon',
     name: 'Gemini 4 Argon',
-    provider: 'Cloud Gemini',
+    provider: 'Cloud Gemini · gemini-3.8-pro',
     latency: '~390ms TTFT',
     speedRating: 'High Performance',
-    description: 'Deeper reasoning model for complex multi-step planning and coding.',
+    description: 'Deeper reasoning alias resolved to gemini-3.8-pro for complex planning and coding.',
   },
   {
     id: 'gemini-4-carbon',
     name: 'Gemini 4 Carbon',
-    provider: 'Cloud Gemini',
+    provider: 'Cloud Gemini · gemini-3.8-flash',
     latency: '~310ms TTFT',
     speedRating: 'Balanced',
-    description: 'Balanced multimodal model for code debugging and structured answers.',
+    description: 'Balanced multimodal model alias for code debugging and structured answers.',
   },
 ];
 
@@ -116,12 +116,14 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
 
   const handleTestConnection = async () => {
     soundFx.playClick();
-    setTestResult('Checking Gemini backend gateway...');
+    setTestResult('Checking BUDDY Gemini backend gateway...');
     try {
       const health = await apiService.getSystemHealth();
       setTestResult(
         health?.status
-          ? `Connected · Backend ${health.status} · Model: ${health.activeModel}`
+          ? `Connected · Backend ${health.status} · Model: ${health.activeModel}${
+              health.resolvedUpstreamModel ? ` (${health.resolvedUpstreamModel})` : ''
+            }`
           : 'Connected · Gemini backend active.'
       );
     } catch (e: any) {
@@ -278,7 +280,14 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
 
           {/* Cloud Gemini Models */}
           <div className="space-y-2">
-            <span className="text-xs font-medium text-slate-300 block">Cloud Gemini Models</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-300 block">Cloud Gemini Models</span>
+              {routerStatus.mode === 'offline' && (
+                <span className="text-[10px] text-amber-300">
+                  Disabled while Offline mode is active
+                </span>
+              )}
+            </div>
             {AVAILABLE_MODELS.map((model) => {
               const isSelected = selectedId === model.id;
               return (
@@ -293,8 +302,11 @@ export const ModelSelectorModal: React.FC<ModelSelectorModalProps> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-slate-100">{model.name}</span>
-                    <span className="text-[11px] text-[#d4a84f] tabular-nums">
+                    <div>
+                      <span className="text-xs font-semibold text-slate-100 block">{model.name}</span>
+                      <span className="text-[10px] text-emerald-300/80 block">{model.provider}</span>
+                    </div>
+                    <span className="text-[11px] text-[#d4a84f] tabular-nums shrink-0">
                       {isSelected ? 'Selected' : model.latency}
                     </span>
                   </div>

@@ -35,7 +35,7 @@ import { Navigation } from './components/Navigation';
 
 import { voiceService } from './services/voiceService';
 import { soundFx } from './services/soundFx';
-import { apiService, ConnectionStatusSnapshot } from './services/apiService';
+import { apiService, ConnectionStatusSnapshot, GatewayHttpError } from './services/apiService';
 import { uiThemeEngine } from './services/uiThemeEngine';
 import { voiceProfileManager } from './services/voiceProfileManager';
 import { wakeWordService } from './services/wakeWordService';
@@ -215,32 +215,53 @@ export default function App() {
       });
 
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: outcome.responseText || 'Operation completed.',
-                model: outcome.model,
-                ttftMs: outcome.ttftMs ?? outcome.latencyMs,
-              }
-            : m
-        )
+        prev
+          .filter((m) => !m.id.startsWith('gateway_err_'))
+          .map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  content: outcome.responseText || 'Operation completed.',
+                  model: outcome.model,
+                  ttftMs: outcome.ttftMs ?? outcome.latencyMs,
+                }
+              : m
+          )
       );
 
       soundFx.playAuthorize();
     } catch (err: any) {
       soundFx.playAbort();
-      setMessages((prev) =>
-        prev.map((m) =>
+      const errMsg = err?.message || 'Communication error.';
+      const isGatewayFailure =
+        err instanceof GatewayHttpError ||
+        /Backend Error|Offline Setup|not configured|timed out|unavailable|authentication failed|Cookie check|Rate limit/i.test(
+          errMsg
+        );
+      setMessages((prev) => {
+        const filtered = isGatewayFailure
+          ? prev.filter(
+              (m) =>
+                !m.id.startsWith('gateway_err_') &&
+                !(
+                  m.role === 'system' &&
+                  /BUDDY Backend Error|SURYA Backend Error|not configured|timed out|Server unavailable|authentication failed/i.test(
+                    m.content
+                  )
+                )
+            )
+          : prev;
+        return filtered.map((m) =>
           m.id === assistantId
             ? {
                 ...m,
+                id: isGatewayFailure ? `gateway_err_${Date.now()}` : m.id,
                 role: 'system',
-                content: `BUDDY Notice: ${err?.message || 'Communication error.'}`,
+                content: `BUDDY Notice: ${errMsg}`,
               }
             : m
-        )
-      );
+        );
+      });
     } finally {
       setIsProcessingChat(false);
     }
@@ -578,6 +599,11 @@ export default function App() {
                 }
                 setCurrentTab(tab);
               }}
+              onOpenBackendSettings={() => {
+                setSystemSubTab('health');
+                setSystemOpenSection('backend');
+                setCurrentTab('system');
+              }}
               onOpenVoiceModal={() => setShowVoiceModal(true)}
               onOpenThemeModal={() => setShowThemeModal(true)}
               onOpenProductivityModal={(initialTab) => {
@@ -605,6 +631,11 @@ export default function App() {
             onOpenTelemetry={() => {
               setSystemSubTab('health');
               setSystemOpenSection('backend');
+              setCurrentTab('system');
+            }}
+            onOpenOfflineSettings={() => {
+              setSystemSubTab('health');
+              setSystemOpenSection('offline');
               setCurrentTab('system');
             }}
           />

@@ -68,7 +68,7 @@ export const ThemeCustomizerModal: React.FC<ThemeCustomizerModalProps> = ({ onCl
     soundFx.playClick();
     uiThemeEngine.resetToDefault();
     setCurrentTheme(uiThemeEngine.getCurrentTheme());
-    setMessage('Reset to Suryadev — Radiant Solar default.');
+    setMessage('Reset to BUDDY Emerald — Sovereign default.');
   };
 
   const handleSaveCustom = () => {

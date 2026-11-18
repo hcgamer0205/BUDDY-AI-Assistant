@@ -16,6 +16,7 @@ import {
   STORAGE_KEY_API_TOKEN,
   STORAGE_KEY_CLIENT_ID,
   GatewayHttpError,
+  GatewayErrorCode,
   ConnectionState,
   UrlValidationResult,
   isAiStudioPreviewUrl,
@@ -29,7 +30,7 @@ import {
   classifyNetworkException,
 } from './gatewayHelpers.js';
 
-export type { ConnectionState, UrlValidationResult };
+export type { ConnectionState, GatewayErrorCode, UrlValidationResult };
 export {
   GatewayHttpError,
   isAiStudioPreviewUrl,
@@ -77,7 +78,9 @@ export interface ConnectionStatusSnapshot {
   lastSuccessAt: string | null;
   lastHttpStatus: number | null;
   lastError: string | null;
+  lastErrorCode: GatewayErrorCode | null;
   serverModel: string | null;
+  resolvedUpstreamModel?: string | null;
   authRequired: boolean;
   geminiConfigured: boolean | null;
 }
@@ -175,10 +178,13 @@ function buildInitialSnapshot(): ConnectionStatusSnapshot {
   const preview = isAiStudioPreviewUrl(effectiveUrl);
 
   let initialError: string | null = null;
+  let initialCode: GatewayErrorCode | null = null;
   if (!configured) {
+    initialCode = 'UNCONFIGURED';
     initialError =
-      'No SURYA backend URL configured. Deploy server.ts to Cloud Run or enter your backend URL in System Settings.';
+      'No BUDDY backend URL configured. Deploy server.ts to an HTTPS host and enter your backend URL in System Settings.';
   } else if (preview) {
+    initialCode = 'COOKIE_GATEWAY_HTML';
     initialError =
       'Configured URL points to an AI Studio preview host that enforces browser cookie checks and blocks mobile APKs.';
   }
@@ -193,7 +199,9 @@ function buildInitialSnapshot(): ConnectionStatusSnapshot {
     lastSuccessAt: null,
     lastHttpStatus: null,
     lastError: initialError,
+    lastErrorCode: initialCode,
     serverModel: null,
+    resolvedUpstreamModel: null,
     authRequired: false,
     geminiConfigured: null,
   };
@@ -234,11 +242,14 @@ export function subscribeConnectionState(
   };
 }
 
-export function setApiBaseUrl(url: string): UrlValidationResult {
+export function setApiBaseUrl(url: string, opts?: { requireNonEmpty?: boolean }): UrlValidationResult {
   const isNative = detectNativePlatform(typeof window !== 'undefined' ? window : undefined);
   const trimmed = typeof url === 'string' ? url.trim() : '';
 
   if (!trimmed) {
+    if (opts?.requireNonEmpty) {
+      return validateBackendUrl('', { isNative, requireNonEmpty: true });
+    }
     writeStorage(STORAGE_KEY_BACKEND_URL, '');
     const effectiveUrl = getApiBaseUrl();
     const configured = isNative ? Boolean(effectiveUrl) : true;
@@ -249,11 +260,12 @@ export function setApiBaseUrl(url: string): UrlValidationResult {
       isConfigured: configured,
       isPreviewUrl: preview,
       lastHttpStatus: null,
+      lastErrorCode: configured ? null : 'UNCONFIGURED',
       lastError: configured
         ? preview
           ? 'Build-time backend URL points to an AI Studio preview host.'
           : 'Custom gateway cleared — run Test Connection to verify backend.'
-        : 'Backend URL cleared. Android APK requires a deployed HTTPS SURYA backend URL.',
+        : 'Backend URL cleared. Android APK requires a deployed HTTPS BUDDY backend URL.',
     });
     return {
       valid: true,
@@ -262,7 +274,7 @@ export function setApiBaseUrl(url: string): UrlValidationResult {
     };
   }
 
-  const validation = validateBackendUrl(trimmed, { isNative });
+  const validation = validateBackendUrl(trimmed, { isNative, requireNonEmpty: opts?.requireNonEmpty });
   if (!validation.valid) {
     return validation;
   }
@@ -276,6 +288,7 @@ export function setApiBaseUrl(url: string): UrlValidationResult {
     isConfigured: isNative ? Boolean(effectiveUrl) : true,
     isPreviewUrl: validation.isPreviewUrl,
     lastHttpStatus: null,
+    lastErrorCode: validation.isPreviewUrl ? 'COOKIE_GATEWAY_HTML' : null,
     lastError:
       validation.warning || 'Gateway URL saved. Run Test Connection to verify reachability.',
   });
@@ -286,6 +299,7 @@ export function setApiToken(token: string): void {
   writeStorage(STORAGE_KEY_API_TOKEN, token ? token.trim() : '');
   updateSnapshot({
     state: 'DISCONNECTED',
+    lastErrorCode: null,
     lastError: 'Access token updated. Run Test Connection to verify authorization.',
   });
 }
@@ -319,7 +333,7 @@ function buildEndpointUrl(endpoint: string): { url: string; baseUrl: string } {
 
   if (isNative && !baseUrl) {
     const err = new GatewayHttpError(
-      'SURYA backend URL is not configured for this Android APK. Open System > Health > Backend Server Gateway and enter your deployed HTTPS backend URL.',
+      'BUDDY backend URL is not configured for this Android APK. Open System > Settings > Backend Server Gateway and enter your deployed HTTPS backend URL.',
       {
         code: 'UNCONFIGURED',
         status: null,
@@ -334,6 +348,7 @@ function buildEndpointUrl(endpoint: string): { url: string; baseUrl: string } {
       isConfigured: false,
       lastCheckedAt: new Date().toISOString(),
       lastHttpStatus: null,
+      lastErrorCode: 'UNCONFIGURED',
       lastError: err.message,
     });
     throw err;
@@ -469,7 +484,9 @@ async function requestJson<T>(
           lastSuccessAt: now,
           lastHttpStatus: res.status,
           lastError: null,
+          lastErrorCode: null,
           serverModel: data?.activeModel || null,
+          resolvedUpstreamModel: data?.resolvedUpstreamModel || null,
           authRequired: Boolean(data?.authRequired),
           geminiConfigured: typeof data?.geminiConfigured === 'boolean' ? data.geminiConfigured : null,
         });
@@ -481,6 +498,7 @@ async function requestJson<T>(
           lastSuccessAt: now,
           lastHttpStatus: res.status,
           lastError: null,
+          lastErrorCode: null,
         });
       }
 
@@ -501,6 +519,7 @@ async function requestJson<T>(
           isPreviewUrl: isAiStudioPreviewUrl(getApiBaseUrl()),
           lastCheckedAt: new Date().toISOString(),
           lastHttpStatus: gwErr.status,
+          lastErrorCode: gwErr.code,
           lastError: gwErr.message,
         });
       }
@@ -625,6 +644,7 @@ export const apiService = {
           state: gwErr.connectionState,
           lastCheckedAt: new Date().toISOString(),
           lastHttpStatus: gwErr.status,
+          lastErrorCode: gwErr.code,
           lastError: gwErr.message,
         });
         throw gwErr;
@@ -643,6 +663,7 @@ export const apiService = {
           state: gwErr.connectionState,
           lastCheckedAt: new Date().toISOString(),
           lastHttpStatus: gwErr.status,
+          lastErrorCode: gwErr.code,
           lastError: gwErr.message,
         });
         throw gwErr;
@@ -697,9 +718,13 @@ export const apiService = {
             accumulatedText += event.chunk;
             onChunk(accumulatedText);
           } else if (event.type === 'error' || event.error) {
-            throw new GatewayHttpError(event.error || 'Stream error received from SURYA engine', {
-              code: 'SERVER_ERROR',
-              connectionState: 'SERVER_ERROR',
+            const errCode: GatewayErrorCode =
+              event.code === 'GEMINI_AUTH_FAILED' || event.code === 'MODEL_UNAVAILABLE'
+                ? event.code
+                : 'SERVER_ERROR';
+            throw new GatewayHttpError(event.error || 'Stream error received from BUDDY engine', {
+              code: errCode,
+              connectionState: errCode === 'GEMINI_AUTH_FAILED' ? 'AUTHENTICATION_REQUIRED' : 'SERVER_ERROR',
               retryable: false,
               url,
             });
@@ -713,6 +738,7 @@ export const apiService = {
               lastCheckedAt: new Date().toISOString(),
               lastHttpStatus: 200,
               lastError: null,
+              lastErrorCode: null,
             });
             return {
               text: accumulatedText || event.fullText || '',
@@ -732,6 +758,7 @@ export const apiService = {
           lastCheckedAt: new Date().toISOString(),
           lastHttpStatus: 200,
           lastError: null,
+          lastErrorCode: null,
         });
       }
 
@@ -743,11 +770,13 @@ export const apiService = {
         timestamp: new Date().toISOString(),
       };
     } catch (err: any) {
-      // Never hide auth, rate-limit, cookie-gateway, HTML, unconfigured, or user-aborted errors
+      // Never hide auth, rate-limit, model-unavailable, cookie-gateway, HTML, unconfigured, or user-aborted errors
       if (err instanceof GatewayHttpError) {
         if (
           err.code === 'UNCONFIGURED' ||
           err.code === 'AUTH_REQUIRED' ||
+          err.code === 'GEMINI_AUTH_FAILED' ||
+          err.code === 'MODEL_UNAVAILABLE' ||
           err.code === 'RATE_LIMITED' ||
           err.code === 'COOKIE_GATEWAY_HTML' ||
           err.code === 'HTML_RESPONSE' ||
@@ -850,7 +879,7 @@ export const apiService = {
 
   async generateStudioApp(
     prompt: string,
-    appName = 'Solar Custom App',
+    appName = 'BUDDY Custom App',
     category = 'Productivity'
   ): Promise<{ success: boolean; app: GeneratedApp; message: string }> {
     return requestJson('/api/apps/generate', {
@@ -883,7 +912,7 @@ export const apiService = {
     });
   },
 
-  async inspectGithubRepo(repo = 'hcgamer0205/SURYA-AI-Assistant'): Promise<GithubRepoSummary> {
+  async inspectGithubRepo(repo = 'hcgamer0205/BUDDY-AI-Assistant'): Promise<GithubRepoSummary> {
     return requestJson(`/api/studio/github?repo=${encodeURIComponent(repo)}`);
   },
 

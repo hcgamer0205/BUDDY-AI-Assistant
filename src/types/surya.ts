@@ -77,8 +77,11 @@ export interface SystemHealthData {
   targetPlatform: string;
   uptimeSeconds: number;
   geminiConfigured: boolean;
+  app?: string;
+  provider?: string;
   authRequired?: boolean;
   activeModel: string;
+  resolvedUpstreamModel?: string;
   fallbackModel?: string;
   memoryRssMb: number;
   worldModelEntries: number;

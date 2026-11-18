@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 
 import {
   resolveApiBaseUrl,
@@ -16,6 +16,9 @@ import {
   looksLikeHtmlPayload,
   classifyResponseFailure,
   classifyNetworkException,
+  GEMINI_API_KEY_URL,
+  isSafeExternalUrl,
+  STORAGE_KEY_BACKEND_URL,
 } from '../src/services/gatewayHelpers.js';
 import {
   OFFLINE_MODEL_CATALOG,
@@ -263,7 +266,9 @@ test('9. Frontend Hygiene & API-Key Secrecy Audit across src/', () => {
     assert.doesNotMatch(content, /\bwindow\.open\s*\(/, `window.open forbidden in ${rel}`);
     assert.doesNotMatch(content, /(?:^|[^\w.])alert\s*\(/m, `blocking alert() forbidden in ${rel}`);
     assert.doesNotMatch(content, /(?:^|[^\w.])confirm\s*\(/m, `blocking confirm() forbidden in ${rel}`);
-    assert.doesNotMatch(content, /GEMINI_API_KEY/, `Server secret name must not leak into client file ${rel}`);
+    assert.doesNotMatch(content, /(?:process\.env|import\.meta\.env)\.(?:VITE_)?GEMINI_API_KEY/, `Env API key secret must not leak into client file ${rel}`);
+    assert.doesNotMatch(content, /\bVITE_GEMINI_API_KEY\b/, `Vite API key secret must not leak into client file ${rel}`);
+    assert.doesNotMatch(content, /generativelanguage\.googleapis\.com/, `Direct client Gemini API calls forbidden in ${rel}`);
     assert.doesNotMatch(content, /AIza[0-9A-Za-z_-]{20,}/, `Hardcoded Google API key forbidden in ${rel}`);
     assert.doesNotMatch(content, /ais-dev-spa3isctk6gboolsd6lpzr/, `Hardcoded preview URL must not exist in ${rel}`);
   }
@@ -1035,6 +1040,230 @@ test('24. Accurate Gender Classification, Fallback Guard & Android TTS Native Br
   assert.ok(mainActSrc.includes('tts.setPitch('), 'Bridge must invoke tts.setPitch');
   assert.ok(mainActSrc.includes('tts.setSpeechRate('), 'Bridge must invoke tts.setSpeechRate');
 });
+
+// 25. Backend Gateway, URL Validation, Timeout/Unavailable/Auth/Model Classification & External Gemini Key URL Safety
+test('25. Backend Gateway URL Security, Timeout/Unavailable/Auth/Model Errors & Gemini Key URL Safety', () => {
+  // 1-3. Missing, valid HTTPS, and invalid URLs (public HTTP, credentials, empty when required)
+  assert.strictEqual(validateBackendUrl('', { isNative: false, requireNonEmpty: true }).valid, false);
+  assert.strictEqual(validateBackendUrl('http://public-backend.example.com', { isNative: true }).valid, false);
+  assert.strictEqual(validateBackendUrl('http://192.168.1.40:3000', { isNative: true }).valid, true);
+  const validHttps = validateBackendUrl('https://buddy-backend.example.run.app/api/health///', {
+    isNative: true,
+    requireNonEmpty: true,
+  });
+  assert.strictEqual(validHttps.valid, true);
+  assert.strictEqual(validHttps.normalized, 'https://buddy-backend.example.run.app');
+  assert.strictEqual(STORAGE_KEY_BACKEND_URL, 'surya_backend_url');
+
+  // 4. Timeout & 504 classification
+  const timeoutNetErr = classifyNetworkException(new Error('Aborted'), 'https://buddy.run.app/api/health', {
+    timedOut: true,
+  });
+  assert.strictEqual(timeoutNetErr.code, 'TIMEOUT');
+  assert.strictEqual(timeoutNetErr.connectionState, 'TIMEOUT');
+
+  const err504 = classifyResponseFailure({
+    url: 'https://buddy.run.app/api/chat',
+    status: 504,
+    bodyText: JSON.stringify({ error: 'Upstream timeout' }),
+  });
+  assert.strictEqual(err504.connectionState, 'TIMEOUT');
+
+  // 5. Server unavailable (network unreachable & 503)
+  const netUnavailErr = classifyNetworkException(new Error('Failed to fetch'), 'https://buddy.run.app/api/health');
+  assert.strictEqual(netUnavailErr.code, 'NETWORK_ERROR');
+  assert.strictEqual(netUnavailErr.connectionState, 'UNAVAILABLE');
+
+  const err503 = classifyResponseFailure({
+    url: 'https://buddy.run.app/api/chat',
+    status: 503,
+    bodyText: JSON.stringify({ error: 'Service unavailable' }),
+  });
+  assert.strictEqual(err503.connectionState, 'UNAVAILABLE');
+
+  // 6. Gemini auth failure & model unavailable response mapping
+  const gemAuthErr = classifyResponseFailure({
+    url: 'https://buddy.run.app/api/chat',
+    status: 401,
+    bodyText: JSON.stringify({ code: 'GEMINI_AUTH_FAILED', error: 'Invalid API key' }),
+  });
+  assert.strictEqual(gemAuthErr.code, 'GEMINI_AUTH_FAILED');
+  assert.strictEqual(gemAuthErr.connectionState, 'AUTHENTICATION_REQUIRED');
+
+  const modelUnavailErr = classifyResponseFailure({
+    url: 'https://buddy.run.app/api/chat',
+    status: 404,
+    bodyText: JSON.stringify({ code: 'MODEL_UNAVAILABLE', error: 'Model retired upstream' }),
+  });
+  assert.strictEqual(modelUnavailErr.code, 'MODEL_UNAVAILABLE');
+  assert.strictEqual(modelUnavailErr.connectionState, 'SERVER_ERROR');
+
+  // 7. External Gemini API key URL safety
+  assert.strictEqual(GEMINI_API_KEY_URL, 'https://aistudio.google.com/app/apikey');
+  assert.strictEqual(isSafeExternalUrl(GEMINI_API_KEY_URL), true);
+  assert.strictEqual(isSafeExternalUrl('http://aistudio.google.com/app/apikey'), false);
+  assert.strictEqual(isSafeExternalUrl('https://aistudio.google.com/app/apikey?key=secret123'), false);
+  assert.strictEqual(isSafeExternalUrl('https://example.com/?token=abc'), false);
+
+  // 8. Verify Get Gemini API Key + Configure Backend URL buttons exist across setup surfaces
+  const chatUi = fs.readFileSync(path.resolve('src/components/StarkCommandCenter.tsx'), 'utf8');
+  const settingsUi = fs.readFileSync(path.resolve('src/components/SystemHealthDashboard.tsx'), 'utf8');
+  const homeUi = fs.readFileSync(path.resolve('src/components/SuryaCommandCenter.tsx'), 'utf8');
+  for (const [name, src] of [
+    ['StarkCommandCenter', chatUi],
+    ['SystemHealthDashboard', settingsUi],
+    ['SuryaCommandCenter', homeUi],
+  ]) {
+    assert.ok(src.includes('Get Gemini API Key'), `${name} must include Get Gemini API Key button`);
+  }
+  assert.ok(chatUi.includes('Configure Backend URL'), 'StarkCommandCenter must include Configure Backend URL button');
+  assert.ok(homeUi.includes('Configure Backend URL'), 'SuryaCommandCenter must include Configure Backend URL button');
+  assert.ok(settingsUi.includes('Backend HTTPS Service Root URL'), 'SystemHealthDashboard must include Backend URL configuration field');
+  assert.ok(settingsUi.includes('Backend Server Gateway'), 'Settings must include Backend Server Gateway section');
+  assert.ok(settingsUi.includes('GEMINI_API_KEY'), 'Setup guide must explain server-side GEMINI_API_KEY configuration');
+  assert.ok(!settingsUi.includes('type="text"\n            value={apiTokenInput}\n            placeholder="GEMINI'), 'Must never accept raw Gemini API keys in APK settings');
+
+  // 9. App.tsx deduplicates gateway notices & StarkCommandCenter suppresses backend warnings in offline mode
+  const appSrc = fs.readFileSync(path.resolve('src/App.tsx'), 'utf8');
+  assert.ok(appSrc.includes('gateway_err_'), 'App.tsx must deduplicate repeated gateway errors');
+  assert.ok(chatUi.includes('!isOfflineMode'), 'Chat UI must suppress backend gateway warnings in Offline mode');
+});
+
+// 26. Live Backend /api/health, Missing GEMINI_API_KEY Auth Classification & Model Alias Resolution
+test('26. Live BUDDY Backend /api/health, Missing Gemini Key & Model Alias Verification', async () => {
+  // Verify model alias resolution and upstream error classifier directly via tsx
+  const tsxBin = path.resolve('node_modules/.bin/tsx');
+  const evalOut = execFileSync(
+    tsxBin,
+    [
+      '-e',
+      `import('./server.ts').then((m) => {
+        console.log(JSON.stringify({
+          hydrogen: m.resolveGeminiModelName('gemini-4-hydrogen'),
+          argon: m.resolveGeminiModelName('gemini-4-argon'),
+          carbon: m.resolveGeminiModelName('gemini-4-carbon'),
+          unknown: m.resolveGeminiModelName('nonexistent-model-xyz'),
+          authErr: m.classifyGeminiUpstreamError({ status: 401, message: 'API_KEY_INVALID' }),
+          modelErr: m.classifyGeminiUpstreamError({ status: 404, message: 'models/foo NOT_FOUND' }),
+        }));
+      });`,
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, SURYA_SKIP_LISTEN: '1', SURYA_SKIP_VITE: '1' },
+      encoding: 'utf8',
+    }
+  );
+  const resolved = JSON.parse(evalOut.trim().split('\n').pop());
+  assert.strictEqual(resolved.hydrogen, 'gemini-3.8-flash');
+  assert.strictEqual(resolved.argon, 'gemini-3.8-pro');
+  assert.strictEqual(resolved.carbon, 'gemini-3.8-flash');
+  assert.strictEqual(resolved.unknown, 'nonexistent-model-xyz');
+  assert.strictEqual(resolved.authErr.code, 'GEMINI_AUTH_FAILED');
+  assert.strictEqual(resolved.authErr.status, 401);
+  assert.strictEqual(resolved.modelErr.code, 'MODEL_UNAVAILABLE');
+  assert.strictEqual(resolved.modelErr.status, 404);
+
+  // Spin up isolated server WITHOUT GEMINI_API_KEY to verify health & clean 503 GEMINI_AUTH_FAILED responses
+  const srv = await startIsolatedBackend({
+    GEMINI_API_KEY: '',
+  });
+  try {
+    const healthRes = await fetch(`${srv.baseUrl}/api/health`);
+    assert.strictEqual(healthRes.status, 200);
+    const health = await healthRes.json();
+    assert.strictEqual(health.status, 'ONLINE');
+    assert.strictEqual(health.app, 'BUDDY');
+    assert.strictEqual(health.provider, 'Google Gemini');
+    assert.strictEqual(health.activeModel, 'gemini-4-hydrogen');
+    assert.strictEqual(health.resolvedUpstreamModel, 'gemini-3.8-flash');
+    assert.strictEqual(health.geminiConfigured, false);
+
+    const chatRes = await fetch(`${srv.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello BUDDY' }),
+    });
+    assert.strictEqual(chatRes.status, 503);
+    const chatErr = await chatRes.json();
+    assert.strictEqual(chatErr.code, 'GEMINI_AUTH_FAILED');
+    assert.ok(!chatErr.error.includes('SURYA'), 'Error response must use BUDDY branding, not SURYA');
+
+    const verifyRes = await fetch(`${srv.baseUrl}/api/config/api-key/verify`, {
+      method: 'POST',
+    });
+    assert.strictEqual(verifyRes.status, 503);
+    const verifyErr = await verifyRes.json();
+    assert.strictEqual(verifyErr.code, 'GEMINI_AUTH_FAILED');
+  } finally {
+    await srv.stop();
+  }
+});
+
+// 27. Offline Mode Without Local Model & User-Facing BUDDY Branding Audit
+test('27. Offline Mode Without Local Model & User-Facing BUDDY Branding Check', async () => {
+  let cloudCalls = 0;
+  const unreadyRouter = new IntelligenceRouter({
+    initialMode: 'offline',
+    isOnlineCheck: () => true, // Online network, yet OFFLINE mode MUST NEVER touch cloud
+    localRuntime: {
+      getState: () => ({ status: 'unloaded', activeModelId: null, activeModelName: null }),
+      async generateResponse() {
+        throw new Error('Should not be called when unloaded');
+      },
+    },
+    cloudHandler: async () => {
+      cloudCalls += 1;
+      return { text: 'Should never run', model: 'gemini-4-hydrogen' };
+    },
+    localToolsHandler: async (input) => {
+      if (input === 'my tasks') {
+        return { answeredLocally: true, text: 'Local tasks ready', modelLabel: 'Local Productivity Index' };
+      }
+      return { answeredLocally: false, vaultSnippet: '' };
+    },
+  });
+
+  const missingRes = await unreadyRouter.routeMessage('Explain quantum gravity');
+  assert.strictEqual(cloudCalls, 0, 'Offline mode must never make cloud calls even when online');
+  assert.strictEqual(missingRes.handledOffline, true);
+  assert.strictEqual(missingRes.modelMissing, true);
+  assert.ok(missingRes.text.includes('BUDDY'), 'Offline notice must carry BUDDY branding');
+  assert.ok(!missingRes.text.includes('SURYA'), 'Offline notice must not contain stale SURYA branding');
+
+  const toolRes = await unreadyRouter.routeMessage('my tasks');
+  assert.strictEqual(toolRes.handledOffline, true);
+  assert.strictEqual(cloudCalls, 0);
+
+  // Android user-facing strings & XML widget audit
+  const mainActivity = fs.readFileSync(
+    path.resolve('android/app/src/main/java/com/surya/assistant/MainActivity.java'),
+    'utf8'
+  );
+  const handsFree = fs.readFileSync(
+    path.resolve('android/app/src/main/java/com/surya/assistant/SuryaHandsFreeService.java'),
+    'utf8'
+  );
+  const widgetXml = fs.readFileSync(
+    path.resolve('android/app/src/main/res/layout/surya_widget.xml'),
+    'utf8'
+  );
+  assert.ok(mainActivity.includes('"BUDDY Reminders & Alerts"'));
+  assert.ok(mainActivity.includes('"BUDDY Notification"'));
+  assert.ok(mainActivity.includes('"BUDDY Security Authorization"'));
+  assert.ok(handsFree.includes('"BUDDY Hands-Free Active"'));
+  assert.ok(handsFree.includes("'Hey BUDDY'"));
+  assert.ok(widgetXml.includes('android:text="BUDDY AI"'));
+  assert.ok(!widgetXml.includes('SURYA AI'), 'Widget label must not display SURYA AI');
+
+  // Ensure no Google API keys appear inside Android XML resources
+  const stringsXml = fs.readFileSync(
+    path.resolve('android/app/src/main/res/values/strings.xml'),
+    'utf8'
+  );
+  assert.doesNotMatch(stringsXml, /AIza[0-9A-Za-z_-]{20,}/, 'Android resources must never contain a Google API key');
+});
+
 
 
 

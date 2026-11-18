@@ -160,7 +160,7 @@ public class MainActivity extends BridgeActivity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                 ALERTS_CHANNEL_ID,
-                "SURYA Reminders & Alerts",
+                "BUDDY Reminders & Alerts",
                 NotificationManager.IMPORTANCE_DEFAULT
             );
             channel.setDescription("Proactive reminders, automation updates, and device status notifications.");
@@ -321,7 +321,7 @@ public class MainActivity extends BridgeActivity {
                 );
                 NotificationCompat.Builder builder = new NotificationCompat.Builder(MainActivity.this, ALERTS_CHANNEL_ID)
                     .setSmallIcon(R.mipmap.ic_launcher)
-                    .setContentTitle(title != null ? title : "SURYA Notification")
+                    .setContentTitle(title != null ? title : "BUDDY Notification")
                     .setContentText(body != null ? body : "")
                     .setAutoCancel(true)
                     .setContentIntent(pending)
@@ -573,7 +573,7 @@ public class MainActivity extends BridgeActivity {
                 });
 
                 BiometricPrompt.PromptInfo promptInfo = new BiometricPrompt.PromptInfo.Builder()
-                        .setTitle(title != null ? title : "SURYA Security Authorization")
+                        .setTitle(title != null ? title : "BUDDY Security Authorization")
                         .setSubtitle(subtitle != null ? subtitle : "Verify your identity with Biometrics or Device Screen Lock")
                         .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG | BiometricManager.Authenticators.DEVICE_CREDENTIAL)
                         .build();

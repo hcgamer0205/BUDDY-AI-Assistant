@@ -1035,7 +1035,7 @@ export class IntelligenceRouter {
         return {
           text: toolResult.text,
           source: 'local-tools',
-          modelLabel: toolResult.modelLabel || 'SURYA Local Knowledge & Tools',
+          modelLabel: toolResult.modelLabel || 'BUDDY Local Knowledge & Tools',
           latencyMs: toolResult.latencyMs || 5,
           handledOffline: true,
         };
@@ -1046,7 +1046,7 @@ export class IntelligenceRouter {
         const res = await this.localRuntime.generateResponse(promptWithHistory, {
           onChunk: context.onStreamChunk,
           systemPrompt:
-            'You are SURYA running completely offline on the user device. Be accurate, concise, and honest.',
+            'You are BUDDY running completely offline on the user device. Be accurate, concise, and honest.',
         });
         return {
           text: res.text,
@@ -1060,19 +1060,20 @@ export class IntelligenceRouter {
       return {
         text:
           this.mode === 'offline'
-            ? 'SURYA is in Offline Privacy Mode and no local AI model is currently loaded. Deterministic tasks, notes, reminders, local app launches, and Knowledge Vault search still work. Download & activate an offline model under System Settings -> Offline AI for conversational reasoning.'
-            : 'No internet connection detected and no offline AI model is loaded yet. Local commands, tasks, notes, and Knowledge Vault remain available; download an offline model in System Settings -> Offline AI for full offline chat.',
+            ? 'BUDDY is in Offline Mode and no local AI model is currently installed or loaded. Deterministic commands, tasks, notes, reminders, and Knowledge Vault search still work. Download & activate an offline model under System > Settings > Offline AI for general offline chat.'
+            : 'No internet connection detected and no offline AI model is loaded yet. Local commands, tasks, notes, and Knowledge Vault remain available; download an offline model in System > Settings > Offline AI for full offline chat.',
         source: 'local-tools',
-        modelLabel: 'Offline Assistant Notice',
+        modelLabel: 'Offline Setup Notice',
         latencyMs: 2,
         handledOffline: true,
+        modelMissing: true,
       };
     }
 
     // 2. Online Mode (or Auto Mode while online)
     if (!status.networkOnline && this.mode === 'online') {
       throw new Error(
-        'SURYA is set to Online Only mode, but no internet connection is detected. Switch to Auto or Offline mode to use on-device capabilities.'
+        'BUDDY is set to Online Only mode, but no internet connection is detected. Switch to Auto or Offline mode to use on-device capabilities.'
       );
     }
 
@@ -1097,7 +1098,7 @@ export class IntelligenceRouter {
         const localRes = await this.localRuntime.generateResponse(fallbackPrompt, {
           onChunk: context.onStreamChunk,
           systemPrompt:
-            'Cloud backend was unreachable. You are SURYA answering offline on the user device.',
+            'Cloud backend was unreachable. You are BUDDY answering offline on the user device.',
         });
         return {
           text: localRes.text,
@@ -1127,7 +1128,7 @@ function buildCompactOfflinePrompt(input, context = {}, vaultSnippet = '') {
     : [];
   if (recent.length > 0) {
     sections.push(
-      `Recent Conversation:\n${recent.map((m) => `${m.role === 'user' ? 'User' : 'SURYA'}: ${m.content}`).join('\n')}`
+      `Recent Conversation:\n${recent.map((m) => `${m.role === 'user' ? 'User' : 'BUDDY'}: ${m.content}`).join('\n')}`
     );
   }
   sections.push(`Current Request: ${input}`);

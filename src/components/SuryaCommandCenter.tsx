@@ -6,8 +6,11 @@ import {
   Settings,
   Send,
   AlertCircle,
+  ExternalLink,
+  KeyRound,
 } from 'lucide-react';
-import { apiService, ConnectionState } from '../services/apiService';
+import { apiService, ConnectionStatusSnapshot } from '../services/apiService';
+import { deviceBridgeService, GEMINI_API_KEY_URL } from '../services/deviceBridgeService';
 import { intelligenceRouter } from '../services/intelligenceRouter';
 import { soundFx } from '../services/soundFx';
 import { ResponseMode, TabType } from '../types/surya';
@@ -18,6 +21,7 @@ interface SuryaCommandCenterProps {
   onChangeResponseMode: (mode: ResponseMode) => void;
   onSendQuickCommand: (text: string) => void;
   onNavigateTab: (tab: TabType) => void;
+  onOpenBackendSettings?: () => void;
   onOpenVoiceModal: () => void;
   onOpenThemeModal: () => void;
   onOpenProductivityModal: (initialTab?: 'tasks' | 'notes' | 'focus' | 'vault' | 'automations') => void;
@@ -28,18 +32,17 @@ interface SuryaCommandCenterProps {
 export const SuryaCommandCenter: React.FC<SuryaCommandCenterProps> = ({
   onSendQuickCommand,
   onNavigateTab,
+  onOpenBackendSettings,
   onOpenProductivityModal,
 }) => {
   const [quickPrompt, setQuickPrompt] = useState('');
-  const [backendStatus, setBackendStatus] = useState<ConnectionState>(
-    apiService.getConnectionStatus().state
+  const [connStatus, setConnStatus] = useState<ConnectionStatusSnapshot>(() =>
+    apiService.getConnectionStatus()
   );
   const [routerStatus, setRouterStatus] = useState(() => intelligenceRouter.getEffectiveStatus());
 
   useEffect(() => {
-    const unsubConn = apiService.subscribeConnectionState((snap) => {
-      setBackendStatus(snap.state);
-    });
+    const unsubConn = apiService.subscribeConnectionState(setConnStatus);
     const unsubRouter = intelligenceRouter.subscribe(setRouterStatus);
     apiService.checkBackendConnection().catch(() => {
       // Handled via connection state subscription
@@ -100,8 +103,12 @@ export const SuryaCommandCenter: React.FC<SuryaCommandCenterProps> = ({
   const needsSetup =
     routerStatus.mode !== 'offline' &&
     routerStatus.activePath !== 'on-device-llm' &&
-    backendStatus !== 'CONNECTED' &&
-    backendStatus !== 'CONNECTING';
+    connStatus.state !== 'CONNECTED' &&
+    connStatus.state !== 'CONNECTING' &&
+    (!connStatus.isConfigured ||
+      connStatus.isPreviewUrl ||
+      Boolean(connStatus.lastErrorCode) ||
+      connStatus.state !== 'DISCONNECTED');
 
   return (
     <div className="w-full max-w-md mx-auto px-4 pt-3 pb-24 flex flex-col items-center space-y-5 select-none">
@@ -109,34 +116,64 @@ export const SuryaCommandCenter: React.FC<SuryaCommandCenterProps> = ({
       <div className="text-center space-y-2 w-full">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full buddy-india-badge text-[11px] font-semibold text-emerald-200 tracking-wider">
           <span className="text-sm">🇮🇳</span>
-          <span>INDIA'S SOVEREIGN AI • MADE IN INDIA</span>
+          <span>INDIA&apos;S SOVEREIGN AI • MADE IN INDIA</span>
         </div>
         <h2 className="text-2xl font-bold tracking-tight text-white flex items-center justify-center gap-2">
           <span className="buddy-gradient-title">{getGreeting()}</span>
         </h2>
         <p className="text-xs text-emerald-300/80 tracking-wide font-medium">
-          BUDDY Intelligent Operating Environment & Neural Voice Core
+          BUDDY Intelligent Operating Environment &amp; Neural Voice Core
         </p>
       </div>
 
-      {/* Subtle Offline / Setup Banner only when disconnected */}
+      {/* Initial Online AI Setup Banner when unconfigured or backend error */}
       {needsSetup && (
-        <button
-          type="button"
-          onClick={() => {
-            soundFx.playClick();
-            onNavigateTab('system');
-          }}
-          className="w-full px-3.5 py-2.5 rounded-2xl bg-[#0b1522]/85 backdrop-blur-xl border border-amber-500/35 hover:border-amber-400/60 flex items-center justify-between gap-2 text-left transition-all shadow-lg cursor-pointer"
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span className="text-xs text-slate-200 truncate">
-              Backend {backendStatus.toLowerCase().replace(/_/g, ' ')}. Tap to configure.
-            </span>
+        <div className="w-full p-3.5 rounded-2xl bg-[#0b1522]/85 backdrop-blur-xl border border-amber-500/35 shadow-lg space-y-2.5">
+          <div className="flex items-start gap-2.5 min-w-0">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-white">
+                {!connStatus.isConfigured || connStatus.isPreviewUrl
+                  ? 'Online AI is not configured'
+                  : 'Online AI connection requires attention'}
+              </p>
+              <p className="text-[11px] text-slate-300 leading-relaxed mt-0.5">
+                {!connStatus.isConfigured || connStatus.isPreviewUrl
+                  ? 'Configure your Gemini API key on your backend and connect BUDDY to its HTTPS endpoint to enable online AI.'
+                  : connStatus.lastError || `Status: ${connStatus.state.toLowerCase().replace(/_/g, ' ')}.`}
+              </p>
+            </div>
           </div>
-          <span className="text-xs font-semibold text-amber-300 shrink-0">Setup</span>
-        </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                soundFx.playClick();
+                deviceBridgeService.openExternalUrl(GEMINI_API_KEY_URL);
+              }}
+              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>Get Gemini API Key</span>
+              <ExternalLink className="w-3 h-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                soundFx.playClick();
+                if (onOpenBackendSettings) {
+                  onOpenBackendSettings();
+                } else {
+                  onNavigateTab('system');
+                }
+              }}
+              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-[#070d14] hover:bg-slate-800 border border-emerald-500/30 text-emerald-200 font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Settings className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Configure Backend URL</span>
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Emerald Glass Text Command Input */}

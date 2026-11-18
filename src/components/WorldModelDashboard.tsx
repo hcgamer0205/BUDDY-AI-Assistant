@@ -111,7 +111,7 @@ export const WorldModelDashboard: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `surya-world-model-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.download = `buddy-world-model-${new Date().toISOString().slice(0, 10)}.json`;
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);

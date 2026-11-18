@@ -61,8 +61,8 @@ public class SuryaHandsFreeService extends Service {
         );
 
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SURYA Hands-Free Active")
-            .setContentText("Listening for wake phrase 'Hey SURYA'. Tap Stop to disable microphone.")
+            .setContentTitle("BUDDY Hands-Free Active")
+            .setContentText("Listening for wake phrase 'Hey BUDDY'. Tap Stop to disable microphone.")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -97,10 +97,10 @@ public class SuryaHandsFreeService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                "SURYA Hands-Free Voice",
+                "BUDDY Hands-Free Voice",
                 NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Visible active microphone status when SURYA Hands-Free Mode is enabled.");
+            channel.setDescription("Visible active microphone status when BUDDY Hands-Free Mode is enabled.");
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
                 manager.createNotificationChannel(channel);

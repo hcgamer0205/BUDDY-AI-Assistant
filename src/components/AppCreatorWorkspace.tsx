@@ -31,7 +31,7 @@ export const AppCreatorWorkspace: React.FC = () => {
   const [versionHistory, setVersionHistory] = useState<StudioVersionSnapshot[]>([]);
 
   const [studioTab, setStudioTab] = useState<'preview' | 'code' | 'github'>('preview');
-  const [repoInput, setRepoInput] = useState('hcgamer0205/SURYA-AI-Assistant');
+  const [repoInput, setRepoInput] = useState('hcgamer0205/BUDDY-AI-Assistant');
   const [githubData, setGithubData] = useState<GithubRepoSummary | null>(null);
   const [isLoadingGithub, setIsLoadingGithub] = useState(false);
 

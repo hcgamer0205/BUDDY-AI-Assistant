@@ -1,6 +1,6 @@
 /**
- * SURYA Offline Capability Audit & Live Readiness Evaluator
- * Truthfully classifies every major SURYA capability as OFFLINE, PARTIAL, or ONLINE
+ * BUDDY Offline Capability Audit & Live Readiness Evaluator
+ * Truthfully classifies every major BUDDY capability as OFFLINE, PARTIAL, or ONLINE
  * along with runtime dependencies, hardware prerequisites, and genuine limitations.
  */
 
@@ -34,12 +34,12 @@ export const OFFLINE_CAPABILITY_MATRIX: OfflineCapabilitySpec[] = [
   {
     id: 'local_wake_word',
     number: 2,
-    name: 'Local Wake-Word Detection ("Hey SURYA")',
+    name: 'Local Wake-Word Detection ("Hey BUDDY")',
     status: 'PARTIAL',
     engine: 'Foreground Speech Matcher & SuryaHandsFreeService',
     requiresDownloadedLlm: false,
     offlineBehavior:
-      'Matches "Hey SURYA" / "हे सूर्या" while foreground listening is active using device speech engine without cloud SURYA backend.',
+      'Matches "Hey BUDDY" while foreground listening is active using device speech engine without cloud BUDDY backend.',
     prerequisites: 'Microphone permission; OS offline speech pack required when network is off.',
     limitations: 'Android blocks third-party DSP screen-off hotword listening; visible foreground notification is required while armed.',
   },
@@ -142,7 +142,7 @@ export const OFFLINE_CAPABILITY_MATRIX: OfflineCapabilitySpec[] = [
   {
     id: 'local_studio',
     number: 11,
-    name: 'SURYA Studio Code Editing, Sandbox & Assistance',
+    name: 'BUDDY Studio Code Editing, Sandbox & Assistance',
     status: 'PARTIAL',
     engine: 'Sandboxed iframe srcDoc + Local File Editor + Active Local LLM',
     requiresDownloadedLlm: false,
@@ -180,8 +180,8 @@ export const OFFLINE_CAPABILITY_MATRIX: OfflineCapabilitySpec[] = [
 export const ONLINE_ONLY_FEATURES = [
   {
     id: 'cloud_gemini',
-    name: 'Cloud Gemini 4 / 3.1 Multimodal Reasoning',
-    reason: 'Requires Google Gemini API via SURYA Cloud Run Express backend.',
+    name: 'Cloud Gemini Multimodal Reasoning',
+    reason: 'Requires Google Gemini API via BUDDY HTTPS Express backend.',
   },
   {
     id: 'github_monitor',

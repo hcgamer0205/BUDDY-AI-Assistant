@@ -1,11 +1,12 @@
 /**
  * Pure URL resolution, validation, normalization, header building, and HTTP/SSE error classification helpers
- * shared between the SURYA frontend (apiService.ts) and Node.js automated test suite (tests/surya.test.js).
+ * shared between the BUDDY frontend (apiService.ts) and Node.js automated test suite (tests/surya.test.js).
  */
 
 export const STORAGE_KEY_BACKEND_URL = 'surya_backend_url';
 export const STORAGE_KEY_API_TOKEN = 'surya_api_token';
 export const STORAGE_KEY_CLIENT_ID = 'surya_client_id';
+export const GEMINI_API_KEY_URL = 'https://aistudio.google.com/app/apikey';
 
 export class GatewayHttpError extends Error {
   constructor(message, opts = {}) {
@@ -73,17 +74,43 @@ export function isLocalOrLanHost(hostname) {
   return false;
 }
 
+export function isSafeExternalUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return false;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return false;
+    if (parsed.username || parsed.password) return false;
+    // Never allow API keys or secret tokens in external URLs
+    const full = parsed.toString();
+    if (/AIza[0-9A-Za-z_-]{12,}/.test(full)) return false;
+    for (const [k] of parsed.searchParams.entries()) {
+      const lk = k.toLowerCase();
+      if (lk === 'key' || lk === 'api_key' || lk === 'apikey' || lk === 'token' || lk === 'secret') {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function validateBackendUrl(raw, opts = {}) {
   const isNative = Boolean(opts.isNative);
+  const requireNonEmpty = Boolean(opts.requireNonEmpty);
   const trimmed = typeof raw === 'string' ? raw.trim() : '';
 
   if (!trimmed) {
-    if (isNative) {
+    if (isNative || requireNonEmpty) {
       return {
         valid: false,
         normalized: '',
         isPreviewUrl: false,
-        error: 'Android APK requires an explicit HTTPS backend URL (or local LAN dev URL).',
+        error: isNative
+          ? 'Android APK requires an explicit HTTPS backend URL (or local LAN dev URL).'
+          : 'Backend URL cannot be empty. Enter your deployed HTTPS backend URL.',
       };
     }
     return {
@@ -101,7 +128,7 @@ export function validateBackendUrl(raw, opts = {}) {
       valid: false,
       normalized: '',
       isPreviewUrl: false,
-      error: 'Invalid URL format. Enter a full URL starting with https:// or http:// (for LAN dev).',
+      error: 'Invalid URL format. Enter a full HTTPS URL such as https://your-service.run.app.',
     };
   }
 
@@ -123,6 +150,16 @@ export function validateBackendUrl(raw, opts = {}) {
     };
   }
 
+  if (parsed.protocol === 'http:' && !isLocalOrLanHost(parsed.hostname)) {
+    return {
+      valid: false,
+      normalized: '',
+      isPreviewUrl: false,
+      error:
+        'Public backend URLs must use HTTPS (https://...). Use http:// only for localhost or private LAN development.',
+    };
+  }
+
   const normalized = normalizeBackendUrl(parsed.toString());
   const isPreview = isAiStudioPreviewUrl(normalized);
 
@@ -132,16 +169,7 @@ export function validateBackendUrl(raw, opts = {}) {
       normalized,
       isPreviewUrl: true,
       warning:
-        'AI Studio preview URLs (ais-dev-* / ais-pre-*) require browser cookie authentication and redirect mobile APK requests to HTML cookie checks. Deploy server.ts to an independent public Cloud Run URL instead.',
-    };
-  }
-
-  if (parsed.protocol === 'http:' && !isLocalOrLanHost(parsed.hostname)) {
-    return {
-      valid: true,
-      normalized,
-      isPreviewUrl: false,
-      warning: 'Non-local HTTP URLs are blocked by Android cleartext policy and insecure on public networks. Use HTTPS.',
+        'AI Studio preview URLs (ais-dev-* / ais-pre-*) require browser cookie authentication and redirect mobile APK requests to HTML cookie checks. Deploy server.ts to an independent public Cloud Run HTTPS URL instead.',
     };
   }
 
@@ -214,7 +242,7 @@ export function classifyResponseFailure({ url, status, contentType = '', bodyTex
 
   if (isCookieRedirect || String(bodyText).includes('__cookie_check') || String(bodyText).includes('Cookie check')) {
     return new GatewayHttpError(
-      `SURYA Backend Error: Gateway at ${url} redirected to a browser cookie challenge (HTTP ${status || 302}). AI Studio preview URLs block Android APK requests; configure an independent Cloud Run HTTPS URL in System Settings.`,
+      `BUDDY Backend Error: Gateway at ${url} redirected to a browser cookie challenge (HTTP ${status || 302}). AI Studio preview URLs block Android APK requests; configure an independent Cloud Run HTTPS URL in Backend Server Gateway settings.`,
       {
         code: 'COOKIE_GATEWAY_HTML',
         status: status || 302,
@@ -227,7 +255,7 @@ export function classifyResponseFailure({ url, status, contentType = '', bodyTex
 
   if (looksLikeHtmlPayload(bodyText, contentType)) {
     return new GatewayHttpError(
-      `SURYA Backend Error: Received HTML webpage instead of JSON API from ${url} (HTTP ${status}). Verify the configured backend URL points to the live SURYA Express server.`,
+      `BUDDY Backend Error: Received HTML webpage instead of JSON API from ${url} (HTTP ${status}). Verify the configured backend URL points to the live BUDDY Express server.`,
       {
         code: 'HTML_RESPONSE',
         status,
@@ -257,12 +285,39 @@ export function classifyResponseFailure({ url, status, contentType = '', bodyTex
   }
 
   const serverMsg = parsed?.error || parsed?.message;
+  const serverCode = parsed?.code;
+
+  if (serverCode === 'GEMINI_AUTH_FAILED') {
+    return new GatewayHttpError(
+      serverMsg || `Gemini API authentication failed on the backend (HTTP ${status}). Check server GEMINI_API_KEY configuration.`,
+      {
+        code: 'GEMINI_AUTH_FAILED',
+        status,
+        connectionState: 'AUTHENTICATION_REQUIRED',
+        retryable: false,
+        url,
+      }
+    );
+  }
+
+  if (serverCode === 'MODEL_UNAVAILABLE') {
+    return new GatewayHttpError(
+      serverMsg || `Selected Gemini model is unavailable or retired upstream (HTTP ${status}).`,
+      {
+        code: 'MODEL_UNAVAILABLE',
+        status,
+        connectionState: 'SERVER_ERROR',
+        retryable: false,
+        url,
+      }
+    );
+  }
 
   if (status === 401 || status === 403) {
     return new GatewayHttpError(
       serverMsg
         ? `${serverMsg} (HTTP ${status})`
-        : `Backend authentication failed (HTTP ${status}). Verify your SURYA API access token or origin policy in System Settings.`,
+        : `Backend authentication failed (HTTP ${status}). Verify your BUDDY API access token or origin policy in Backend Server Gateway settings.`,
       {
         code: 'AUTH_REQUIRED',
         status,
@@ -290,7 +345,7 @@ export function classifyResponseFailure({ url, status, contentType = '', bodyTex
 
   if (status === 404) {
     return new GatewayHttpError(
-      serverMsg || `Endpoint not found (HTTP 404) at ${url}. Confirm your backend URL targets the SURYA Express service root.`,
+      serverMsg || `Endpoint not found (HTTP 404) at ${url}. Confirm your backend URL targets the BUDDY Express service root.`,
       {
         code: 'NOT_FOUND',
         status: 404,
@@ -303,11 +358,11 @@ export function classifyResponseFailure({ url, status, contentType = '', bodyTex
 
   const retryable = status === 502 || status === 503 || status === 504;
   return new GatewayHttpError(
-    serverMsg || `SURYA backend returned HTTP ${status} from ${url}.`,
+    serverMsg || `BUDDY backend returned HTTP ${status} from ${url}.`,
     {
       code: 'SERVER_ERROR',
       status,
-      connectionState: 'SERVER_ERROR',
+      connectionState: status === 502 || status === 503 ? 'UNAVAILABLE' : status === 504 ? 'TIMEOUT' : 'SERVER_ERROR',
       retryable,
       url,
     }
@@ -331,7 +386,7 @@ export function classifyNetworkException(err, url, { timedOut = false, userAbort
       {
         code: 'TIMEOUT',
         status: null,
-        connectionState: 'DISCONNECTED',
+        connectionState: 'TIMEOUT',
         retryable: true,
         url,
       }
@@ -340,11 +395,11 @@ export function classifyNetworkException(err, url, { timedOut = false, userAbort
 
   const detail = err?.message || 'Failed to fetch';
   return new GatewayHttpError(
-    `Network connection failed to ${url}: ${detail}. Verify internet access, HTTPS/CORS headers, or update your backend gateway URL in System Settings.`,
+    `Server unavailable at ${url}: ${detail}. Verify internet access, HTTPS endpoint, or update your Backend Server Gateway settings.`,
     {
       code: 'NETWORK_ERROR',
       status: null,
-      connectionState: 'DISCONNECTED',
+      connectionState: 'UNAVAILABLE',
       retryable: true,
       url,
     }
