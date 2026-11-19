@@ -34,6 +34,19 @@ import {
   LocalRuntimeError,
   IntelligenceRouter,
 } from '../src/services/offlineModelRuntimeCore.js';
+import {
+  GeminiKeyVault,
+  DirectGeminiClient,
+  DirectGeminiError,
+  DEFAULT_GEMINI_MODEL,
+  SEED_GEMINI_MODELS,
+  isDeprecatedOrNonChatModel,
+  maskGeminiApiKey,
+  redactGeminiSecrets,
+  validateGeminiApiKeyFormat,
+  parseGeminiSseResponse,
+  buildGeminiGenerateBody,
+} from '../src/services/byokGeminiHelpers.js';
 
 function collectSourceFiles(dir) {
   const results = [];
@@ -258,17 +271,27 @@ test('9. Frontend Hygiene & API-Key Secrecy Audit across src/', () => {
   const srcFiles = collectSourceFiles(path.resolve('src'));
   assert.ok(srcFiles.length >= 20, 'Expected full SURYA TypeScript source tree');
 
+  const allowedDirectGeminiFiles = new Set([
+    path.normalize('src/services/byokGeminiHelpers.js'),
+    path.normalize('src/services/byokGeminiHelpers.d.ts'),
+    path.normalize('src/services/directGeminiService.ts'),
+  ]);
+
   for (const file of srcFiles) {
     const content = fs.readFileSync(file, 'utf-8');
-    const rel = path.relative(process.cwd(), file);
+    const rel = path.normalize(path.relative(process.cwd(), file));
     assert.doesNotMatch(content, /\bvajra\b/i, `Legacy branding found in ${rel}`);
     assert.doesNotMatch(content, /picsum\.photos/i, `External picsum URL found in ${rel}`);
     assert.doesNotMatch(content, /\bwindow\.open\s*\(/, `window.open forbidden in ${rel}`);
     assert.doesNotMatch(content, /(?:^|[^\w.])alert\s*\(/m, `blocking alert() forbidden in ${rel}`);
     assert.doesNotMatch(content, /(?:^|[^\w.])confirm\s*\(/m, `blocking confirm() forbidden in ${rel}`);
-    assert.doesNotMatch(content, /(?:process\.env|import\.meta\.env)\.(?:VITE_)?GEMINI_API_KEY/, `Env API key secret must not leak into client file ${rel}`);
-    assert.doesNotMatch(content, /\bVITE_GEMINI_API_KEY\b/, `Vite API key secret must not leak into client file ${rel}`);
-    assert.doesNotMatch(content, /generativelanguage\.googleapis\.com/, `Direct client Gemini API calls forbidden in ${rel}`);
+    assert.doesNotMatch(content, /(?:process\.env|import\.meta\.env)\.(?:VITE_)?GEMINI_API_KEY/, `Bundled env API key secret must not exist in client file ${rel}`);
+    assert.doesNotMatch(content, /\bVITE_GEMINI_API_KEY\b/, `Vite API key secret must not exist in client file ${rel}`);
+    if (!allowedDirectGeminiFiles.has(rel)) {
+      assert.doesNotMatch(content, /generativelanguage\.googleapis\.com/, `Direct Gemini endpoint must only be referenced inside BYOK transport modules, not ${rel}`);
+    }
+    assert.doesNotMatch(content, /generativelanguage\.googleapis\.com[^\n]*[?&]key=/, `API key query parameter forbidden (use x-goog-api-key header) in ${rel}`);
+    assert.doesNotMatch(content, /localStorage\.setItem\([^)]*gemini[_-]?api[_-]?key/i, `Plain-text localStorage API key persistence forbidden in ${rel}`);
     assert.doesNotMatch(content, /AIza[0-9A-Za-z_-]{20,}/, `Hardcoded Google API key forbidden in ${rel}`);
     assert.doesNotMatch(content, /ais-dev-spa3isctk6gboolsd6lpzr/, `Hardcoded preview URL must not exist in ${rel}`);
   }
@@ -1105,28 +1128,26 @@ test('25. Backend Gateway URL Security, Timeout/Unavailable/Auth/Model Errors & 
   assert.strictEqual(isSafeExternalUrl('https://aistudio.google.com/app/apikey?key=secret123'), false);
   assert.strictEqual(isSafeExternalUrl('https://example.com/?token=abc'), false);
 
-  // 8. Verify Get Gemini API Key + Configure Backend URL buttons exist across setup surfaces
+  // 8. Verify Server-Side Gemini Setup UI (zero BYOK prompts in Chat, Home, Settings, Model Selector)
   const chatUi = fs.readFileSync(path.resolve('src/components/StarkCommandCenter.tsx'), 'utf8');
   const settingsUi = fs.readFileSync(path.resolve('src/components/SystemHealthDashboard.tsx'), 'utf8');
   const homeUi = fs.readFileSync(path.resolve('src/components/SuryaCommandCenter.tsx'), 'utf8');
-  for (const [name, src] of [
-    ['StarkCommandCenter', chatUi],
-    ['SystemHealthDashboard', settingsUi],
-    ['SuryaCommandCenter', homeUi],
-  ]) {
-    assert.ok(src.includes('Get Gemini API Key'), `${name} must include Get Gemini API Key button`);
-  }
-  assert.ok(chatUi.includes('Configure Backend URL'), 'StarkCommandCenter must include Configure Backend URL button');
-  assert.ok(homeUi.includes('Configure Backend URL'), 'SuryaCommandCenter must include Configure Backend URL button');
-  assert.ok(settingsUi.includes('Backend HTTPS Service Root URL'), 'SystemHealthDashboard must include Backend URL configuration field');
-  assert.ok(settingsUi.includes('Backend Server Gateway'), 'Settings must include Backend Server Gateway section');
-  assert.ok(settingsUi.includes('GEMINI_API_KEY'), 'Setup guide must explain server-side GEMINI_API_KEY configuration');
-  assert.ok(!settingsUi.includes('type="text"\n            value={apiTokenInput}\n            placeholder="GEMINI'), 'Must never accept raw Gemini API keys in APK settings');
-
-  // 9. App.tsx deduplicates gateway notices & StarkCommandCenter suppresses backend warnings in offline mode
   const appSrc = fs.readFileSync(path.resolve('src/App.tsx'), 'utf8');
-  assert.ok(appSrc.includes('gateway_err_'), 'App.tsx must deduplicate repeated gateway errors');
-  assert.ok(chatUi.includes('!isOfflineMode'), 'Chat UI must suppress backend gateway warnings in Offline mode');
+
+  assert.doesNotMatch(chatUi, /Connect Gemini|Add API Key|Get Gemini API Key/, 'StarkCommandCenter must not show BYOK API-key banners');
+  assert.doesNotMatch(chatUi, /Configure Backend URL/, 'StarkCommandCenter must not require Configure Backend URL');
+
+  assert.doesNotMatch(homeUi, /Connect Gemini|Add API Key|Get API Key/, 'SuryaCommandCenter must not show BYOK API-key onboarding card');
+  assert.doesNotMatch(homeUi, /Configure Backend URL/, 'SuryaCommandCenter must not require Configure Backend URL');
+
+  assert.ok(settingsUi.includes('Gemini AI & Model Configuration (Server-Side)'), 'Settings must include Server-Side Gemini Configuration section');
+  assert.ok(settingsUi.includes('Select Gemini Model'), 'Settings must include Select Gemini Model selector');
+  assert.ok(settingsUi.includes('Verify Gemini Connection'), 'Settings must include Verify Gemini Connection button');
+  assert.doesNotMatch(settingsUi, /Save API Key|Remove API Key|Get Gemini API Key/, 'Settings must not ask user for client-side BYOK keys');
+
+  // 9. App.tsx uses server gateway connection & StarkCommandCenter respects Offline mode
+  assert.ok(appSrc.includes('gateway_err_'), 'App.tsx must deduplicate repeated gateway/connection notices');
+  assert.ok(chatUi.includes('!isOfflineMode'), 'Chat UI must suppress online controls in Offline mode');
 });
 
 // 26. Live Backend /api/health, Missing GEMINI_API_KEY Auth Classification & Model Alias Resolution
@@ -1263,6 +1284,490 @@ test('27. Offline Mode Without Local Model & User-Facing BUDDY Branding Check', 
   );
   assert.doesNotMatch(stringsXml, /AIza[0-9A-Za-z_-]{20,}/, 'Android resources must never contain a Google API key');
 });
+
+// 28. BYOK Key Vault: Android Keystore Bridge, Masking, Replacement, Removal & Zero Plain-Text localStorage
+test('28. BYOK Key Vault Storage, Masking, Replacement, Removal & Zero Plain-Text localStorage', async () => {
+  // Format validation checks
+  assert.strictEqual(validateGeminiApiKeyFormat('').valid, false);
+  assert.strictEqual(validateGeminiApiKeyFormat('https://aistudio.google.com/app/apikey').valid, false);
+  assert.strictEqual(validateGeminiApiKeyFormat('AIzaSy short').valid, false);
+  assert.strictEqual(validateGeminiApiKeyFormat('shortkey').valid, false);
+  const validFormat = validateGeminiApiKeyFormat('  AIzaSyDemoKeyForTesting1234567890  ');
+  assert.strictEqual(validFormat.valid, true);
+  assert.strictEqual(validFormat.normalized, 'AIzaSyDemoKeyForTesting1234567890');
+
+  assert.strictEqual(maskGeminiApiKey('AIzaSyDemoKeyForTesting1234567890'), 'AIza••••7890');
+
+  // Track modelStorage (simulated localStorage) to prove API keys NEVER enter plain-text localStorage
+  const plainStorage = new Map();
+  const mockModelStorage = {
+    getItem: (k) => (plainStorage.has(k) ? plainStorage.get(k) : null),
+    setItem: (k, v) => plainStorage.set(k, String(v)),
+    removeItem: (k) => plainStorage.delete(k),
+  };
+
+  // Simulated Android Keystore bridge
+  let keystoreCipherSlot = '';
+  const mockBridge = {
+    saveGeminiApiKey: (k) => {
+      keystoreCipherSlot = `ENC_ANDROID_KS:${Buffer.from(k).toString('base64')}`;
+      return true;
+    },
+    hasGeminiApiKey: () => Boolean(keystoreCipherSlot),
+    getGeminiApiKey: () =>
+      keystoreCipherSlot.startsWith('ENC_ANDROID_KS:')
+        ? Buffer.from(keystoreCipherSlot.replace('ENC_ANDROID_KS:', ''), 'base64').toString('utf8')
+        : '',
+    getMaskedGeminiApiKey: () => maskGeminiApiKey(mockBridge.getGeminiApiKey()),
+    removeGeminiApiKey: () => {
+      keystoreCipherSlot = '';
+      return true;
+    },
+  };
+
+  const vault = new GeminiKeyVault({
+    nativeBridgeProvider: () => mockBridge,
+    modelStorage: mockModelStorage,
+  });
+  const initSnap = await vault.hydrate();
+  assert.strictEqual(initSnap.storageBackend, 'android-keystore');
+  assert.strictEqual(initSnap.hasKey, false);
+  assert.strictEqual(initSnap.verificationState, 'unconfigured');
+  assert.strictEqual(initSnap.selectedModel, DEFAULT_GEMINI_MODEL);
+
+  // Save key
+  const savedSnap = await vault.saveKey('AIzaSyFirstTestKeyValue1234567890');
+  assert.strictEqual(savedSnap.hasKey, true);
+  assert.strictEqual(savedSnap.maskedKey, 'AIza••••7890');
+  assert.strictEqual(savedSnap.verificationState, 'unverified');
+  assert.strictEqual(await vault.getKey(), 'AIzaSyFirstTestKeyValue1234567890');
+
+  // Verify zero secret leakage in localStorage
+  for (const [k, v] of plainStorage.entries()) {
+    assert.doesNotMatch(v, /AIzaSy/, `Plain-text localStorage key ${k} must never store an API key`);
+  }
+
+  // Replace key
+  const replacedSnap = await vault.saveKey('AIzaSySecondKeyValue9876543210');
+  assert.strictEqual(replacedSnap.maskedKey, 'AIza••••3210');
+  assert.strictEqual(await vault.getKey(), 'AIzaSySecondKeyValue9876543210');
+
+  // Remove key
+  const removedSnap = await vault.removeKey();
+  assert.strictEqual(removedSnap.hasKey, false);
+  assert.strictEqual(removedSnap.maskedKey, '');
+  assert.strictEqual(removedSnap.verificationState, 'unconfigured');
+  assert.strictEqual(await vault.getKey(), '');
+});
+
+// 29. Direct Gemini Verification, Model Filtering & Header Authentication
+test('29. Direct Gemini Verification, Dynamic Model Filtering & Header Auth', async () => {
+  assert.strictEqual(isDeprecatedOrNonChatModel('gemini-1.5-flash'), true);
+  assert.strictEqual(isDeprecatedOrNonChatModel('gemini-2.0-flash'), true);
+  assert.strictEqual(isDeprecatedOrNonChatModel('gemini-pro'), true);
+  assert.strictEqual(isDeprecatedOrNonChatModel('text-embedding-004'), true);
+  assert.strictEqual(isDeprecatedOrNonChatModel('gemini-3.8-flash'), false);
+  assert.ok(SEED_GEMINI_MODELS.some((m) => m.id === 'gemini-3.8-flash'));
+
+  const plainStorage = new Map();
+  const mockModelStorage = {
+    getItem: (k) => (plainStorage.has(k) ? plainStorage.get(k) : null),
+    setItem: (k, v) => plainStorage.set(k, String(v)),
+  };
+
+  const vault = new GeminiKeyVault({ modelStorage: mockModelStorage });
+  const testKey = 'AIzaSyVerifyKeyHeaderOnly123456789';
+  await vault.saveKey(testKey);
+
+  const recordedRequests = [];
+  const fakeFetch = async (url, init) => {
+    recordedRequests.push({ url, init });
+    if (url.includes(':generateContent')) {
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'OK' }] } }],
+          });
+        },
+      };
+    }
+    if (url.includes('/models?')) {
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({
+            models: [
+              {
+                name: 'models/gemini-1.5-pro',
+                displayName: 'Gemini 1.5 Pro (Legacy)',
+                supportedGenerationMethods: ['generateContent'],
+              },
+              {
+                name: 'models/gemini-3.8-flash',
+                displayName: 'Gemini 3.8 Flash',
+                supportedGenerationMethods: ['generateContent'],
+              },
+              {
+                name: 'models/gemini-3.8-pro',
+                displayName: 'Gemini 3.8 Pro',
+                supportedGenerationMethods: ['generateContent'],
+              },
+              {
+                name: 'models/text-embedding-004',
+                displayName: 'Embedding',
+                supportedGenerationMethods: ['embedContent'],
+              },
+            ],
+          });
+        },
+      };
+    }
+    throw new Error(`Unexpected URL: ${url}`);
+  };
+
+  const client = new DirectGeminiClient({ vault, fetcher: fakeFetch });
+  const result = await client.verifyApiKey();
+
+  assert.strictEqual(result.valid, true);
+  assert.strictEqual(result.model, 'gemini-3.8-flash');
+  assert.strictEqual(vault.getSnapshot().verificationState, 'verified');
+  assert.ok(vault.getSnapshot().verifiedModels.includes('gemini-3.8-flash'));
+  assert.ok(vault.getSnapshot().verifiedModels.includes('gemini-3.8-pro'));
+
+  // Deprecated & embedding models must be excluded
+  const catalog = vault.getAvailableModels();
+  assert.strictEqual(catalog.some((m) => m.id === 'gemini-1.5-pro'), false);
+  assert.strictEqual(catalog.some((m) => m.id === 'text-embedding-004'), false);
+  assert.strictEqual(catalog.find((m) => m.id === 'gemini-3.8-flash')?.isVerified, true);
+
+  // Confirm key was sent strictly via header, NEVER via ?key= URL parameter
+  for (const req of recordedRequests) {
+    assert.ok(!req.url.includes('key='), 'API key must NEVER appear in query parameters');
+    assert.strictEqual(req.init.headers['x-goog-api-key'], testKey);
+  }
+
+  // Switching to another verified model keeps verified status and persists selected model ID
+  vault.setSelectedModel('gemini-3.8-pro');
+  assert.strictEqual(vault.getSnapshot().selectedModel, 'gemini-3.8-pro');
+  assert.strictEqual(vault.getSnapshot().verificationState, 'verified');
+  assert.strictEqual(plainStorage.get('buddy_selected_gemini_model_v1'), 'gemini-3.8-pro');
+});
+
+// 30. Direct Gemini Error Classification & Zero Secret Leakage
+test('30. Direct Gemini Error Classification (Invalid Key, 404 Model, Quota, Rate Limit, Network, Timeout) & Key Redaction', async () => {
+  const secretKey = 'AIzaSyUltraSecretKeyMustBeRedacted999';
+  const vault = new GeminiKeyVault();
+  await vault.saveKey(secretKey);
+
+  // Redactor sanity check
+  const leakedText = `Upstream rejected key ${secretKey} on ?key=${encodeURIComponent(secretKey)}`;
+  const redacted = redactGeminiSecrets(leakedText, secretKey);
+  assert.ok(!redacted.includes(secretKey), 'Redactor must strip exact key');
+  assert.ok(!redacted.includes('AIzaSy'), 'Redactor must strip AIza pattern');
+
+  // 1. Invalid key (401/403)
+  const invalidClient = new DirectGeminiClient({
+    vault,
+    fetcher: async () => ({
+      ok: false,
+      status: 400,
+      async text() {
+        return JSON.stringify({
+          error: {
+            code: 400,
+            status: 'INVALID_ARGUMENT',
+            message: `API key not valid. Key=${secretKey}`,
+          },
+        });
+      },
+    }),
+  });
+  await assert.rejects(
+    () => invalidClient.verifyApiKey(),
+    (err) => {
+      assert.ok(err instanceof DirectGeminiError);
+      assert.strictEqual(err.code, 'INVALID_API_KEY');
+      assert.ok(!err.message.includes(secretKey), 'Error message must not expose raw API key');
+      return true;
+    }
+  );
+  assert.strictEqual(vault.getSnapshot().verificationState, 'invalid_key');
+
+  // 2. Unavailable / retired model (404 NOT_FOUND)
+  const retiredClient = new DirectGeminiClient({
+    vault,
+    fetcher: async () => ({
+      ok: false,
+      status: 404,
+      async text() {
+        return JSON.stringify({
+          error: {
+            code: 404,
+            status: 'NOT_FOUND',
+            message: 'models/gemini-3.8-pro is not found for API version v1beta',
+          },
+        });
+      },
+    }),
+  });
+  await assert.rejects(
+    () => retiredClient.verifyApiKey({ model: 'gemini-3.8-pro' }),
+    (err) => err instanceof DirectGeminiError && err.code === 'MODEL_UNAVAILABLE'
+  );
+  assert.strictEqual(vault.getSnapshot().verificationState, 'model_unavailable');
+  assert.ok(vault.getSnapshot().unavailableModels['gemini-3.8-pro']);
+
+  // 3. Quota exhausted vs rate limited (429)
+  const quotaClient = new DirectGeminiClient({
+    vault,
+    fetcher: async () => ({
+      ok: false,
+      status: 429,
+      async text() {
+        return JSON.stringify({
+          error: {
+            code: 429,
+            status: 'RESOURCE_EXHAUSTED',
+            message: 'You exceeded your current quota, please check your plan and billing details.',
+          },
+        });
+      },
+    }),
+  });
+  await assert.rejects(
+    () => quotaClient.sendChat('Hello'),
+    (err) => err instanceof DirectGeminiError && err.code === 'QUOTA_EXHAUSTED'
+  );
+
+  // 4. Network error & Timeout
+  const netClient = new DirectGeminiClient({
+    vault,
+    fetcher: async () => {
+      throw new Error(`Failed to connect with ${secretKey}`);
+    },
+  });
+  await assert.rejects(
+    () => netClient.sendChat('Hello'),
+    (err) => {
+      assert.strictEqual(err.code, 'NETWORK_ERROR');
+      assert.ok(!err.message.includes(secretKey));
+      return true;
+    }
+  );
+  assert.strictEqual(vault.getSnapshot().verificationState, 'network_error');
+});
+
+// 31. Direct Gemini SSE Streaming, Multi-Turn Context & Online Chat Without BUDDY Server + Offline Isolation
+test('31. Direct Gemini Streaming, Conversation Context, Server-Free Online Chat & Offline Isolation', async () => {
+  const vault = new GeminiKeyVault();
+  await vault.saveKey('AIzaSyStreamingDirectKey1234567890');
+  vault.setSelectedModel('gemini-3.8-flash');
+
+  const capturedBodies = [];
+  const sseChunks = [
+    'data: {"candidates":[{"content":{"parts":[{"text":"Namaste "}]}}]}\n\n',
+    'data: {"candidates":[{"content":{"parts":[{"text":"from BUDDY!"}]}}]}\n\n',
+  ];
+
+  const client = new DirectGeminiClient({
+    vault,
+    fetcher: async (_url, init) => {
+      capturedBodies.push(JSON.parse(init.body));
+      let idx = 0;
+      const enc = new TextEncoder();
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader() {
+            return {
+              async read() {
+                if (idx < sseChunks.length) {
+                  const value = enc.encode(sseChunks[idx]);
+                  idx += 1;
+                  return { done: false, value };
+                }
+                return { done: true };
+              },
+            };
+          },
+        },
+      };
+    },
+  });
+
+  // Verify buildGeminiGenerateBody preserves multi-turn context
+  const history = [
+    { role: 'user', content: 'My name is Aarav.' },
+    { role: 'assistant', content: 'Hello Aarav!' },
+  ];
+  const samplePayload = buildGeminiGenerateBody({
+    message: 'What is my name?',
+    history,
+    responseMode: 'concise',
+  });
+  assert.strictEqual(samplePayload.contents.length, 3);
+  assert.strictEqual(samplePayload.contents[0].role, 'user');
+  assert.strictEqual(samplePayload.contents[1].role, 'model');
+  assert.strictEqual(samplePayload.contents[2].parts[0].text, 'What is my name?');
+  assert.ok(samplePayload.system_instruction.parts[0].text.includes('BUDDY'));
+
+  // Verify IntelligenceRouter routes Online chat cleanly through DirectGeminiClient WITHOUT any backend URL
+  let externalFetchCalls = 0;
+  const streamedParts = [];
+  const router = new IntelligenceRouter({
+    initialMode: 'auto',
+    isOnlineCheck: () => true,
+    localRuntime: {
+      getState: () => ({ status: 'unloaded', activeModelId: null, activeModelName: null }),
+      async generateResponse() {
+        throw new Error('Should not run offline when online & unready');
+      },
+    },
+    cloudHandler: async (input, ctx) => {
+      externalFetchCalls += 1;
+      return client.sendChatStream(
+        input,
+        ctx.history || [],
+        (acc) => {
+          streamedParts.push(acc);
+          ctx.onStreamChunk?.(acc);
+        },
+        { model: ctx.model }
+      );
+    },
+  });
+
+  const onlineRes = await router.routeMessage('Say hi in Hindi-English', { history });
+  assert.strictEqual(externalFetchCalls, 1);
+  assert.strictEqual(onlineRes.source, 'cloud-gemini');
+  assert.strictEqual(onlineRes.text, 'Namaste from BUDDY!');
+  assert.strictEqual(streamedParts[0], 'Namaste ');
+  assert.strictEqual(streamedParts[1], 'Namaste from BUDDY!');
+  assert.strictEqual(capturedBodies[0].contents.length, 3);
+
+  // Switch to OFFLINE mode with key STILL configured & network online -> zero external calls
+  router.setMode('offline');
+  const offlineRes = await router.routeMessage('Explain gravity');
+  assert.strictEqual(externalFetchCalls, 1, 'Offline mode must never touch Gemini REST API even when BYOK key is saved');
+  assert.strictEqual(offlineRes.handledOffline, true);
+
+  // Direct test of parseGeminiSseResponse helper
+  const enc = new TextEncoder();
+  const fakeSseRes = {
+    body: {
+      getReader() {
+        let done = false;
+        return {
+          async read() {
+            if (!done) {
+              done = true;
+              return {
+                done: false,
+                value: enc.encode('data: {"candidates":[{"content":{"parts":[{"text":"Hello SSE"}]}}]}\n\n'),
+              };
+            }
+            return { done: true };
+          },
+        };
+      },
+    },
+  };
+  const parsedSse = await parseGeminiSseResponse(fakeSseRes);
+  assert.strictEqual(parsedSse, 'Hello SSE');
+});
+
+// 32. Android Keystore Native Security Bridge Inspection
+test('32. Android MainActivity Keystore AES-GCM Bridge & Secrecy Audit', () => {
+  const mainActPath = path.resolve('android/app/src/main/java/com/surya/assistant/MainActivity.java');
+  const mainActSrc = fs.readFileSync(mainActPath, 'utf8');
+
+  assert.ok(mainActSrc.includes('AndroidKeyStore'), 'MainActivity must use AndroidKeyStore');
+  assert.ok(mainActSrc.includes('AES/GCM/NoPadding'), 'MainActivity must encrypt API key using AES/GCM/NoPadding');
+  assert.ok(mainActSrc.includes('KeyGenParameterSpec'), 'MainActivity must generate hardware-backed/Keystore AES key');
+  assert.ok(mainActSrc.includes('public boolean saveGeminiApiKey('), 'Must expose saveGeminiApiKey bridge');
+  assert.ok(mainActSrc.includes('public boolean hasGeminiApiKey('), 'Must expose hasGeminiApiKey bridge');
+  assert.ok(mainActSrc.includes('public String getGeminiApiKey('), 'Must expose getGeminiApiKey bridge');
+  assert.ok(mainActSrc.includes('public String getMaskedGeminiApiKey('), 'Must expose getMaskedGeminiApiKey bridge');
+  assert.ok(mainActSrc.includes('public boolean removeGeminiApiKey('), 'Must expose removeGeminiApiKey bridge');
+  assert.doesNotMatch(mainActSrc, /Log\.(?:d|i|v|w|e)\([^)]*apiKey/i, 'Native Android logs must never print raw API keys');
+});
+
+// 33. Server-Side Gemini Interactions API & Live API Migration Audit
+test('33. Server-Side Gemini Interactions API & Live API Migration Verification', async () => {
+  const serverSrc = fs.readFileSync(path.resolve('server.ts'), 'utf8');
+  assert.doesNotMatch(
+    serverSrc,
+    /\b(generateContent|generateContentStream|streamGenerateContent)\b/,
+    'server.ts must never call deprecated generateContent or generateContentStream APIs'
+  );
+  assert.ok(serverSrc.includes('ai.interactions.create('), 'server.ts must use Gemini Interactions API (ai.interactions.create)');
+  assert.ok(serverSrc.includes("event.event_type === 'step.delta'"), 'server.ts must handle Interactions API step.delta streaming events');
+  assert.ok(serverSrc.includes('previous_interaction_id'), 'server.ts must support multi-turn previous_interaction_id');
+  assert.ok(serverSrc.includes('ai.live.connect('), 'server.ts must implement server-side Live API via ai.live.connect');
+  assert.ok(serverSrc.includes('gemini-3.8-live'), 'server.ts must configure gemini-3.8-live for Live Voice');
+  assert.ok(serverSrc.includes("path: '/api/live'"), 'server.ts must mount WebSocket Live bridge on /api/live');
+
+  const runtimeFrontendFiles = [
+    'src/App.tsx',
+    'src/services/apiService.ts',
+    'src/services/intelligenceRouter.ts',
+    'src/services/cognitiveEngine.ts',
+    'src/services/modelPreferenceService.ts',
+    'src/services/liveApiService.ts',
+    'src/components/SuryaCommandCenter.tsx',
+    'src/components/StarkCommandCenter.tsx',
+    'src/components/ModelSelectorModal.tsx',
+    'src/components/SystemHealthDashboard.tsx',
+    'src/components/AppCreatorWorkspace.tsx',
+    'src/components/SuryaVisionHUD.tsx',
+    'src/components/StandardOpticsHUD.tsx',
+    'src/components/ScientificKnowledge.tsx',
+  ];
+
+  for (const rel of runtimeFrontendFiles) {
+    const content = fs.readFileSync(path.resolve(rel), 'utf8');
+    assert.doesNotMatch(content, /directGeminiService/, `Active frontend module ${rel} must not use directGeminiService`);
+    assert.doesNotMatch(content, /geminiKeyVault/, `Active frontend module ${rel} must not use geminiKeyVault`);
+    assert.doesNotMatch(content, /Add Gemini API Key|Connect Gemini/, `Active UI module ${rel} must not ask user for BYOK API keys`);
+  }
+
+  const liveSvc = fs.readFileSync(path.resolve('src/services/liveApiService.ts'), 'utf8');
+  assert.ok(liveSvc.includes('/api/live'), 'liveApiService.ts must connect to /api/live WebSocket');
+
+  const srv = await startIsolatedBackend({ GEMINI_API_KEY: '' });
+  try {
+    const modelsRes = await fetch(`${srv.baseUrl}/api/models`);
+    assert.strictEqual(modelsRes.status, 200);
+    const modelsJson = await modelsRes.json();
+    assert.ok(Array.isArray(modelsJson.models) && modelsJson.models.length >= 3, '/api/models must return model catalog');
+
+    const streamRes = await fetch(`${srv.baseUrl}/api/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello', model: 'gemini-4-hydrogen' }),
+    });
+    assert.strictEqual(streamRes.status, 503);
+    const streamBody = await streamRes.json();
+    assert.strictEqual(streamBody.code, 'GEMINI_AUTH_FAILED');
+    assert.ok(!JSON.stringify(streamBody).includes('PROXY_GENERATION_DISABLED'));
+
+    const visionRes = await fetch(`${srv.baseUrl}/api/vision/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ imageBase64: 'data:image/jpeg;base64,/9j/4AAQ', mode: 'general' }),
+    });
+    assert.strictEqual(visionRes.status, 503);
+    const visionBody = await visionRes.json();
+    assert.strictEqual(visionBody.code, 'GEMINI_AUTH_FAILED');
+  } finally {
+    await srv.stop();
+  }
+});
+
 
 
 

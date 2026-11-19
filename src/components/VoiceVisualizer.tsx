@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Mic, Square, Radio, Sparkles } from 'lucide-react';
 import { voiceService } from '../services/voiceService';
 import { wakeWordService, WakeWordState } from '../services/wakeWordService';
+import { liveApiService, LiveSessionState } from '../services/liveApiService';
+import { intelligenceRouter } from '../services/intelligenceRouter';
 import { soundFx } from '../services/soundFx';
 
 interface VoiceVisualizerProps {
@@ -11,22 +13,28 @@ interface VoiceVisualizerProps {
 export const VoiceVisualizer: React.FC<VoiceVisualizerProps> = ({ onTranscriptCaptured }) => {
   const [voiceState, setVoiceState] = useState(voiceService.getState());
   const [wakeState, setWakeState] = useState<WakeWordState>(wakeWordService.getState());
+  const [liveState, setLiveState] = useState<LiveSessionState>(() => liveApiService.getState());
+  const [routerStatus, setRouterStatus] = useState(() => intelligenceRouter.getEffectiveStatus());
   const [waveAmplitudes, setWaveAmplitudes] = useState<number[]>(new Array(12).fill(6));
 
   useEffect(() => {
     const unsubVoice = voiceService.subscribe(setVoiceState);
     const unsubWake = wakeWordService.subscribe(setWakeState);
+    const unsubLive = liveApiService.subscribe(setLiveState);
+    const unsubRouter = intelligenceRouter.subscribe(setRouterStatus);
     return () => {
       unsubVoice();
       unsubWake();
+      unsubLive();
+      unsubRouter();
     };
   }, []);
 
   useEffect(() => {
     let interval: any = null;
-    if (voiceState.isListening || voiceState.isSpeaking) {
+    if (voiceState.isListening || voiceState.isSpeaking || liveState.connected || liveState.isSpeaking) {
       interval = setInterval(() => {
-        const factor = voiceState.isSpeaking ? 24 : 18;
+        const factor = voiceState.isSpeaking || liveState.isSpeaking ? 24 : 18;
         setWaveAmplitudes(Array.from({ length: 12 }, () => 4 + Math.floor(Math.random() * factor)));
       }, 85);
     } else {
@@ -35,10 +43,13 @@ export const VoiceVisualizer: React.FC<VoiceVisualizerProps> = ({ onTranscriptCa
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [voiceState.isListening, voiceState.isSpeaking]);
+  }, [voiceState.isListening, voiceState.isSpeaking, liveState.connected, liveState.isSpeaking]);
 
   const handleToggleTalk = () => {
     soundFx.playClick();
+    if (liveState.connected) {
+      liveApiService.disconnect();
+    }
     if (voiceState.isListening) {
       voiceService.stopListening();
     } else if (voiceState.isSpeaking) {
@@ -52,10 +63,27 @@ export const VoiceVisualizer: React.FC<VoiceVisualizerProps> = ({ onTranscriptCa
     }
   };
 
+  const handleToggleLiveVoice = async () => {
+    soundFx.playClick();
+    if (liveState.connected || liveState.connecting) {
+      liveApiService.disconnect();
+      return;
+    }
+    if (voiceState.isListening) {
+      voiceService.stopListening();
+    }
+    if (voiceState.isSpeaking) {
+      voiceService.stopSpeaking();
+    }
+    await liveApiService.connect();
+  };
+
   const handleStopSpeaking = () => {
     soundFx.playClick();
     voiceService.stopSpeaking();
   };
+
+  const isLiveBlockedOffline = routerStatus.mode === 'offline' || !routerStatus.networkOnline;
 
   return (
     <div className="w-full max-w-md mx-auto px-4 flex flex-col items-center gap-3 select-none">
@@ -68,20 +96,20 @@ export const VoiceVisualizer: React.FC<VoiceVisualizerProps> = ({ onTranscriptCa
         </div>
       )}
 
-      {voiceState.error && (
+      {(voiceState.error || liveState.error) && (
         <div className="w-full px-4 py-2 rounded-2xl bg-rose-950/60 backdrop-blur-md border border-rose-500/35 text-xs text-rose-200 text-center">
-          {voiceState.error}
+          {liveState.error || voiceState.error}
         </div>
       )}
 
       {/* Emerald & Teal Acoustic Waveform */}
-      {(voiceState.isListening || voiceState.isSpeaking) && (
+      {(voiceState.isListening || voiceState.isSpeaking || liveState.connected || liveState.isSpeaking) && (
         <div className="flex items-center justify-center gap-1.5 h-9" aria-hidden="true">
           {waveAmplitudes.map((height, idx) => (
             <div
               key={idx}
               className={`w-1 rounded-full transition-all duration-100 ${
-                voiceState.isSpeaking
+                voiceState.isSpeaking || liveState.isSpeaking
                   ? 'bg-gradient-to-t from-teal-400 to-emerald-300'
                   : 'bg-gradient-to-t from-emerald-500 to-cyan-400'
               }`}
@@ -92,12 +120,12 @@ export const VoiceVisualizer: React.FC<VoiceVisualizerProps> = ({ onTranscriptCa
       )}
 
       {/* Prominent Translucent Circular & Pill Controls */}
-      <div className="flex items-center justify-center gap-3 flex-wrap">
+      <div className="flex items-center justify-center gap-2.5 flex-wrap">
         <button
           type="button"
           onClick={handleToggleTalk}
           aria-label={voiceState.isListening ? 'Stop listening' : 'Talk to BUDDY'}
-          className={`min-h-[50px] px-6 py-2.5 rounded-full text-sm font-semibold flex items-center gap-3 transition-all duration-200 active:scale-95 cursor-pointer backdrop-blur-xl ${
+          className={`min-h-[50px] px-5 py-2.5 rounded-full text-sm font-semibold flex items-center gap-2.5 transition-all duration-200 active:scale-95 cursor-pointer backdrop-blur-xl ${
             voiceState.isListening
               ? 'bg-emerald-500 text-slate-950 shadow-[0_0_24px_rgba(16,185,129,0.55)] border border-emerald-300'
               : 'bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-200 border border-emerald-500/30 hover:border-emerald-400/50 shadow-[0_4px_20px_rgba(0,0,0,0.4)]'
@@ -115,6 +143,28 @@ export const VoiceVisualizer: React.FC<VoiceVisualizerProps> = ({ onTranscriptCa
           </span>
           {!voiceState.isListening && <Sparkles className="w-3.5 h-3.5 text-emerald-400/80" />}
         </button>
+
+        {!isLiveBlockedOffline && (
+          <button
+            type="button"
+            onClick={handleToggleLiveVoice}
+            aria-label={liveState.connected ? 'End Live Voice session' : 'Start Gemini Live Voice'}
+            className={`min-h-[50px] px-4 py-2.5 rounded-full text-xs font-semibold flex items-center gap-2 transition-all duration-200 active:scale-95 cursor-pointer backdrop-blur-xl border ${
+              liveState.connected
+                ? 'bg-teal-400 text-slate-950 border-teal-200 shadow-[0_0_20px_rgba(45,212,191,0.5)]'
+                : 'bg-[#0b1522]/85 hover:bg-[#0f1f30] text-teal-200 border-teal-500/35 hover:border-teal-400/60'
+            }`}
+          >
+            <Radio className={`w-3.5 h-3.5 ${liveState.connected || liveState.connecting ? 'animate-pulse' : ''}`} />
+            <span>
+              {liveState.connecting
+                ? 'Connecting...'
+                : liveState.connected
+                ? 'Live Active'
+                : 'Live Voice'}
+            </span>
+          </button>
+        )}
 
         {voiceState.isSpeaking && (
           <button

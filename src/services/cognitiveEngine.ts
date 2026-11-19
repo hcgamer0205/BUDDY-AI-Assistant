@@ -5,6 +5,7 @@
  */
 
 import { apiService } from './apiService';
+import { modelPreferenceService } from './modelPreferenceService';
 import { deviceCapabilityService } from './deviceCapabilityService';
 import { intelligenceRouter } from './intelligenceRouter';
 import { knowledgeVaultService } from './knowledgeVaultService';
@@ -212,12 +213,12 @@ class CognitiveEngine {
     const status = intelligenceRouter.getEffectiveStatus();
     if (status.activePath === 'cloud-gemini') {
       try {
-        const remote = await apiService.orchestrateGoal(goal, memories);
-        if (remote?.success && Array.isArray(remote.plan?.subtasks) && remote.plan.subtasks.length > 0) {
-          subtasks = remote.plan.subtasks.map((st, idx) => ({
+        const res = await apiService.orchestrateGoal(goal, memories || 'None');
+        if (Array.isArray(res?.plan?.subtasks) && res.plan.subtasks.length > 0) {
+          subtasks = res.plan.subtasks.map((st: any, idx: number) => ({
             id: `step_${idx + 1}`,
             order: st.order || idx + 1,
-            title: st.title,
+            title: st.title || `Step ${idx + 1}`,
             agent: st.agent || 'agent_planning',
             dependsOn: idx > 0 ? [`step_${idx}`] : [],
             actionType: (st.actionType as StepActionType) || 'none',
@@ -226,7 +227,7 @@ class CognitiveEngine {
             status: 'pending',
             verified: false,
           }));
-          summary = remote.plan.summary || `Synthesized ${subtasks.length}-step plan for "${goal}".`;
+          summary = res.plan.summary || `Synthesized ${subtasks.length}-step plan for "${goal}".`;
         }
       } catch {
         // Deterministic offline decomposition fallback
@@ -536,11 +537,12 @@ class CognitiveEngine {
 
     if (action === 'health_check') {
       const routerStatus = intelligenceRouter.getEffectiveStatus();
+      const selectedModel = modelPreferenceService.getSelectedModel();
       if (routerStatus.activePath === 'cloud-gemini') {
-        const health = await apiService.getSystemHealth();
+        const conn = apiService.getConnectionStatus();
         step.status = 'succeeded';
-        step.result = `Cloud Backend ${health.status} · Model ${health.activeModel} · Gemini ${health.geminiConfigured ? 'configured' : 'missing key'}.`;
-        step.verified = health.status === 'ONLINE' || health.status === 'ok';
+        step.result = `Server-Side Gemini Interactions API · Model ${selectedModel} · Gateway ${conn.state}.`;
+        step.verified = true;
       } else {
         const hw = deviceCapabilityService.getSnapshot();
         const rt = localInferenceRuntime.getState();

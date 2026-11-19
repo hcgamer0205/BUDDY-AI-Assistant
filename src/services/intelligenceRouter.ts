@@ -7,6 +7,7 @@
 import { IntelligenceRouter, IntelligenceMode } from './offlineModelRuntimeCore.js';
 import { localInferenceRuntime } from './localInferenceRuntime';
 import { apiService } from './apiService';
+import { modelPreferenceService } from './modelPreferenceService';
 import { deviceBridgeService } from './deviceBridgeService';
 import { knowledgeVaultService } from './knowledgeVaultService';
 import { personalMemoryService } from './personalMemoryService';
@@ -32,6 +33,7 @@ export const intelligenceRouter = new IntelligenceRouter({
   },
   localRuntime: localInferenceRuntime,
   cloudHandler: async (input: string, context: any) => {
+    const selectedModel = context.model || modelPreferenceService.getSelectedModel();
     const res = await apiService.sendChatMessageStream(
       input,
       context.history || [],
@@ -39,7 +41,7 @@ export const intelligenceRouter = new IntelligenceRouter({
         context.onStreamChunk?.(partial);
       },
       {
-        model: context.model,
+        model: selectedModel,
         fastMode: context.responseMode === 'concise',
         responseMode: context.responseMode,
         preferredLanguage: context.language,

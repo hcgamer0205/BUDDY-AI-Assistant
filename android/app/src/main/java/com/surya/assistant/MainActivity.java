@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
@@ -19,12 +20,15 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
+import android.util.Base64;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import androidx.annotation.NonNull;
@@ -36,11 +40,17 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.BridgeActivity;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -52,6 +62,10 @@ import org.json.JSONObject;
 public class MainActivity extends BridgeActivity {
 
     private static final String ALERTS_CHANNEL_ID = "surya_alerts_channel";
+    private static final String GEMINI_KEYSTORE_PROVIDER = "AndroidKeyStore";
+    private static final String GEMINI_KEYSTORE_ALIAS = "buddy_gemini_api_key_aes";
+    private static final String SECURE_PREFS_NAME = "buddy_secure_keystore_prefs";
+    private static final String PREF_ENCRYPTED_GEMINI_KEY = "gemini_api_key_enc";
     private TextToSpeech tts;
     private boolean ttsInitialized = false;
     private SpeechRecognizer speechRecognizer;
@@ -839,6 +853,116 @@ public class MainActivity extends BridgeActivity {
         public boolean openOfflineVoiceDataSettings() {
             return offlineModelService != null && offlineModelService.openOfflineVoiceDataSettings();
         }
+
+        // ---------------- ANDROID KEYSTORE ENCRYPTED GEMINI BYOK STORAGE ----------------
+
+        @JavascriptInterface
+        public boolean saveGeminiApiKey(String apiKey) {
+            try {
+                SharedPreferences prefs = getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
+                if (apiKey == null || apiKey.trim().isEmpty()) {
+                    prefs.edit().remove(PREF_ENCRYPTED_GEMINI_KEY).apply();
+                    return true;
+                }
+                String trimmed = apiKey.trim();
+                SecretKey secretKey = getOrCreateGeminiKeystoreSecretKey();
+                Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+                byte[] iv = cipher.getIV();
+                byte[] ciphertext = cipher.doFinal(trimmed.getBytes(StandardCharsets.UTF_8));
+                String encoded = Base64.encodeToString(iv, Base64.NO_WRAP) + ":" +
+                    Base64.encodeToString(ciphertext, Base64.NO_WRAP);
+                prefs.edit().putString(PREF_ENCRYPTED_GEMINI_KEY, encoded).apply();
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean hasGeminiApiKey() {
+            try {
+                SharedPreferences prefs = getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
+                String encoded = prefs.getString(PREF_ENCRYPTED_GEMINI_KEY, null);
+                return encoded != null && encoded.contains(":");
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public String getGeminiApiKey() {
+            try {
+                return decryptGeminiApiKey();
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public String getMaskedGeminiApiKey() {
+            try {
+                String plain = decryptGeminiApiKey();
+                if (plain.isEmpty()) return "";
+                if (plain.length() <= 8) return "••••";
+                return plain.substring(0, 4) + "••••" + plain.substring(plain.length() - 4);
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public boolean removeGeminiApiKey() {
+            try {
+                SharedPreferences prefs = getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
+                prefs.edit().remove(PREF_ENCRYPTED_GEMINI_KEY).apply();
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+    }
+
+    private SecretKey getOrCreateGeminiKeystoreSecretKey() throws Exception {
+        KeyStore keyStore = KeyStore.getInstance(GEMINI_KEYSTORE_PROVIDER);
+        keyStore.load(null);
+        KeyStore.Entry entry = keyStore.getEntry(GEMINI_KEYSTORE_ALIAS, null);
+        if (entry instanceof KeyStore.SecretKeyEntry) {
+            return ((KeyStore.SecretKeyEntry) entry).getSecretKey();
+        }
+        KeyGenerator keyGenerator = KeyGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_AES,
+            GEMINI_KEYSTORE_PROVIDER
+        );
+        KeyGenParameterSpec spec = new KeyGenParameterSpec.Builder(
+            GEMINI_KEYSTORE_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build();
+        keyGenerator.init(spec);
+        return keyGenerator.generateKey();
+    }
+
+    private String decryptGeminiApiKey() throws Exception {
+        SharedPreferences prefs = getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE);
+        String encoded = prefs.getString(PREF_ENCRYPTED_GEMINI_KEY, null);
+        if (encoded == null || !encoded.contains(":")) {
+            return "";
+        }
+        String[] parts = encoded.split(":", 2);
+        if (parts.length != 2) {
+            return "";
+        }
+        byte[] iv = Base64.decode(parts[0], Base64.NO_WRAP);
+        byte[] ciphertext = Base64.decode(parts[1], Base64.NO_WRAP);
+        SecretKey secretKey = getOrCreateGeminiKeystoreSecretKey();
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, secretKey, new GCMParameterSpec(128, iv));
+        byte[] decrypted = cipher.doFinal(ciphertext);
+        return new String(decrypted, StandardCharsets.UTF_8);
     }
 
     private void notifyWebAuthResult(final String challengeId, final boolean success, final String message) {

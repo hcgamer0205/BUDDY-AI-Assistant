@@ -181,7 +181,7 @@ export const ONLINE_ONLY_FEATURES = [
   {
     id: 'cloud_gemini',
     name: 'Cloud Gemini Multimodal Reasoning',
-    reason: 'Requires Google Gemini API via BUDDY HTTPS Express backend.',
+    reason: 'Connects directly to Google Gemini API using your own saved Gemini API key over HTTPS.',
   },
   {
     id: 'github_monitor',

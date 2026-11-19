@@ -63,6 +63,7 @@ export interface ClientChatContext {
   fastMode?: boolean;
   responseMode?: ResponseMode;
   preferredLanguage?: string;
+  previousInteractionId?: string;
   userMemories?: { key: string; value: string; category?: string }[];
   deviceContext?: Record<string, any>;
   signal?: AbortSignal;
@@ -179,14 +180,10 @@ function buildInitialSnapshot(): ConnectionStatusSnapshot {
 
   let initialError: string | null = null;
   let initialCode: GatewayErrorCode | null = null;
-  if (!configured) {
-    initialCode = 'UNCONFIGURED';
-    initialError =
-      'No BUDDY backend URL configured. Deploy server.ts to an HTTPS host and enter your backend URL in System Settings.';
-  } else if (preview) {
+  if (preview) {
     initialCode = 'COOKIE_GATEWAY_HTML';
     initialError =
-      'Configured URL points to an AI Studio preview host that enforces browser cookie checks and blocks mobile APKs.';
+      'Optional server URL points to an AI Studio preview host that enforces browser cookie checks on mobile APKs.';
   }
 
   return {
@@ -571,11 +568,27 @@ export const apiService = {
   joinApiUrl,
   isAiStudioPreviewUrl,
 
+  async getAvailableModels(): Promise<{
+    models: any[];
+    defaultModel: string;
+    fallbackModel: string;
+    timestamp?: string;
+  }> {
+    return requestJson('/api/models');
+  },
+
   async sendChatMessage(
     message: string,
     history: ChatMessage[] = [],
     clientContext: ClientChatContext = {}
-  ): Promise<{ text: string; model?: string; latencyMs?: number; suggestedAction?: any; timestamp: string }> {
+  ): Promise<{
+    text: string;
+    model?: string;
+    interactionId?: string;
+    latencyMs?: number;
+    suggestedAction?: any;
+    timestamp: string;
+  }> {
     return requestJson('/api/chat', {
       method: 'POST',
       signal: clientContext.signal,
@@ -586,6 +599,7 @@ export const apiService = {
         fastMode: clientContext?.fastMode ?? (clientContext?.responseMode !== 'detailed'),
         responseMode: clientContext?.responseMode || 'concise',
         preferredLanguage: clientContext?.preferredLanguage || 'auto',
+        previousInteractionId: clientContext?.previousInteractionId,
         userMemories: clientContext?.userMemories || [],
         deviceContext: clientContext?.deviceContext,
       }),
@@ -601,7 +615,14 @@ export const apiService = {
     history: ChatMessage[] = [],
     onChunk: (accumulatedText: string) => void,
     clientContext: ClientChatContext = {}
-  ): Promise<{ text: string; model?: string; latencyMs?: number; ttftMs?: number; timestamp: string }> {
+  ): Promise<{
+    text: string;
+    model?: string;
+    interactionId?: string;
+    latencyMs?: number;
+    ttftMs?: number;
+    timestamp: string;
+  }> {
     const { url } = buildEndpointUrl('/api/chat/stream');
     const headers = buildRequestHeaders(undefined, true, 'text/event-stream');
 
@@ -620,6 +641,7 @@ export const apiService = {
             fastMode: clientContext?.fastMode ?? (clientContext?.responseMode !== 'detailed'),
             responseMode: clientContext?.responseMode || 'concise',
             preferredLanguage: clientContext?.preferredLanguage || 'auto',
+            previousInteractionId: clientContext?.previousInteractionId,
             userMemories: clientContext?.userMemories || [],
             deviceContext: clientContext?.deviceContext,
           }),
@@ -743,6 +765,7 @@ export const apiService = {
             return {
               text: accumulatedText || event.fullText || '',
               model: metaModel,
+              interactionId: event.interactionId,
               latencyMs: totalTimeMs || 0,
               ttftMs,
               timestamp: new Date().toISOString(),
@@ -1008,6 +1031,7 @@ export const apiService = {
   async verifyGeminiConnection(): Promise<{
     success: boolean;
     model: string;
+    resolvedUpstreamModel?: string;
     fallbackUsed?: boolean;
     latencyMs: number;
     response: string;

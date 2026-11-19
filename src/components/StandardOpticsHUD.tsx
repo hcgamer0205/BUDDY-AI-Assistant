@@ -102,10 +102,9 @@ export const StandardOpticsHUD: React.FC = () => {
     }
 
     try {
-      const res = await apiService.analyzeOpticalScene(
-        base64Image,
-        'Analyze this view through BUDDY Standard Optics HUD. Identify items, assess distance benignly, and generate clean structured telemetry.'
-      );
+      const prompt =
+        'Analyze this view through BUDDY Standard Optics HUD. Identify items, assess distance benignly, and generate clean structured telemetry.';
+      const res = await apiService.analyzeOpticalScene(base64Image, prompt);
       setTelemetryResult(res.telemetry);
       soundFx.playAuthorize();
     } catch (err: any) {

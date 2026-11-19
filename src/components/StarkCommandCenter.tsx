@@ -14,17 +14,12 @@ import {
   SlidersHorizontal,
   Search,
   X,
-  ExternalLink,
-  KeyRound,
-  Wifi,
   WifiOff,
   Radio,
-  ShieldAlert,
 } from 'lucide-react';
 import { ChatMessage, ResponseMode, StarkActionPlan } from '../types/surya';
-import { apiService, ConnectionStatusSnapshot } from '../services/apiService';
 import { intelligenceRouter } from '../services/intelligenceRouter';
-import { deviceBridgeService, GEMINI_API_KEY_URL } from '../services/deviceBridgeService';
+import { liveApiService, LiveSessionState } from '../services/liveApiService';
 import { voiceService } from '../services/voiceService';
 import { soundFx } from '../services/soundFx';
 import { uiThemeEngine } from '../services/uiThemeEngine';
@@ -41,6 +36,7 @@ interface StarkCommandCenterProps {
   responseMode: ResponseMode;
   onChangeResponseMode: (mode: ResponseMode) => void;
   onOpenModelModal?: () => void;
+  onOpenGeminiSettings?: () => void;
   onOpenTelemetry?: () => void;
   onOpenOfflineSettings?: () => void;
 }
@@ -52,10 +48,11 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
   onClearHistory,
   onExecutePlan,
   isProcessing,
-  activeModel = 'gemini-4-hydrogen',
+  activeModel = 'gemini-3.8-flash',
   responseMode,
   onChangeResponseMode,
   onOpenModelModal,
+  onOpenGeminiSettings,
   onOpenTelemetry,
   onOpenOfflineSettings,
 }) => {
@@ -63,12 +60,9 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
   const [menuOpen, setMenuOpen] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isTestingGateway, setIsTestingGateway] = useState(false);
   const [theme, setTheme] = useState<SuryaThemeConfig>(uiThemeEngine.getCurrentTheme());
   const [voiceState, setVoiceState] = useState(voiceService.getState());
-  const [connStatus, setConnStatus] = useState<ConnectionStatusSnapshot>(
-    apiService.getConnectionStatus()
-  );
+  const [liveState, setLiveState] = useState<LiveSessionState>(() => liveApiService.getState());
   const [routerStatus, setRouterStatus] = useState(() => intelligenceRouter.getEffectiveStatus());
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -76,12 +70,12 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
   useEffect(() => {
     const unsubTheme = uiThemeEngine.subscribe(setTheme);
     const unsubVoice = voiceService.subscribe(setVoiceState);
-    const unsubConn = apiService.subscribeConnectionState(setConnStatus);
+    const unsubLive = liveApiService.subscribe(setLiveState);
     const unsubRouter = intelligenceRouter.subscribe(setRouterStatus);
     return () => {
       unsubTheme();
       unsubVoice();
-      unsubConn();
+      unsubLive();
       unsubRouter();
     };
   }, []);
@@ -123,22 +117,13 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
     setMenuOpen(false);
   };
 
-  const handleTestGateway = async () => {
+  const openGeminiSetup = () => {
     soundFx.playClick();
-    setIsTestingGateway(true);
-    try {
-      await apiService.checkBackendConnection();
-      soundFx.playAuthorize();
-    } catch {
-      soundFx.playAbort();
-    } finally {
-      setIsTestingGateway(false);
+    if (onOpenGeminiSettings) {
+      onOpenGeminiSettings();
+    } else if (onOpenTelemetry) {
+      onOpenTelemetry();
     }
-  };
-
-  const handleOpenGeminiKeyPage = async () => {
-    soundFx.playClick();
-    await deviceBridgeService.openExternalUrl(GEMINI_API_KEY_URL);
   };
 
   const quickSuggestions = [
@@ -149,45 +134,6 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
   ];
 
   const isOfflineMode = routerStatus.mode === 'offline';
-  const offlineHandledLocally =
-    routerStatus.activePath === 'on-device-llm' ||
-    (isOfflineMode && routerStatus.localReady);
-  const hasGatewayFailureState =
-    connStatus.state === 'AUTHENTICATION_REQUIRED' ||
-    connStatus.state === 'TIMEOUT' ||
-    connStatus.state === 'UNAVAILABLE' ||
-    connStatus.state === 'RATE_LIMITED' ||
-    connStatus.state === 'SERVER_ERROR' ||
-    Boolean(connStatus.lastErrorCode);
-  const showGatewayBanner =
-    !isOfflineMode &&
-    !offlineHandledLocally &&
-    connStatus.state !== 'CONNECTED' &&
-    connStatus.state !== 'CONNECTING' &&
-    (!connStatus.isConfigured || connStatus.isPreviewUrl || hasGatewayFailureState);
-
-  const setupCardTitle =
-    !connStatus.isConfigured || connStatus.isPreviewUrl
-      ? 'Online AI is not configured'
-      : connStatus.state === 'TIMEOUT'
-      ? 'Backend connection timed out'
-      : connStatus.lastErrorCode === 'GEMINI_AUTH_FAILED'
-      ? 'Gemini API authentication failed'
-      : connStatus.lastErrorCode === 'MODEL_UNAVAILABLE'
-      ? 'Selected AI model unavailable'
-      : connStatus.state === 'AUTHENTICATION_REQUIRED'
-      ? 'Backend authentication required'
-      : connStatus.state === 'UNAVAILABLE'
-      ? 'Backend server unavailable'
-      : connStatus.state === 'RATE_LIMITED'
-      ? 'Backend rate limit reached'
-      : 'Online AI connection issue';
-
-  const setupCardDescription =
-    !connStatus.isConfigured || connStatus.isPreviewUrl
-      ? 'Configure your Gemini API key on your backend and connect BUDDY to its HTTPS endpoint to enable online AI.'
-      : connStatus.lastError ||
-        'Verify your backend HTTPS URL and server-side GEMINI_API_KEY configuration in Backend Server Gateway settings.';
 
   const visibleMessages = searchQuery.trim()
     ? messages.filter((m) =>
@@ -208,9 +154,7 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
                 : 'Offline Mode · Local tools active (no local model installed)'
               : routerStatus.activePath === 'on-device-llm'
               ? `On-Device · ${routerStatus.activeLocalModelName}`
-              : `Cloud Gemini · ${activeModel}${
-                  connStatus.resolvedUpstreamModel ? ` (${connStatus.resolvedUpstreamModel})` : ''
-                }`}
+              : `Server Gemini · ${activeModel}`}
           </p>
         </div>
 
@@ -303,17 +247,17 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
                   </div>
                 </div>
 
-                {onOpenTelemetry && (
+                {(onOpenGeminiSettings || onOpenTelemetry) && (
                   <button
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
-                      onOpenTelemetry();
+                      openGeminiSetup();
                     }}
                     className="w-full px-3.5 py-2.5 text-left text-xs text-slate-200 hover:bg-slate-800/60 flex items-center gap-2.5"
                   >
-                    <Settings className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Backend &amp; Gemini Settings</span>
+                    <Settings className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Gemini &amp; Model Settings</span>
                   </button>
                 )}
 
@@ -408,61 +352,6 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
         </div>
       )}
 
-      {/* Actionable Emerald Cybernetic Online AI Setup / Error Card */}
-      {showGatewayBanner && (
-        <div className="mt-3 p-4 rounded-2xl bg-[#0b1522]/92 backdrop-blur-xl border border-emerald-500/30 shadow-xl space-y-3">
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/35 flex items-center justify-center shrink-0">
-              <ShieldAlert className="w-4 h-4 text-amber-400" />
-            </div>
-            <div className="min-w-0 flex-1 space-y-1">
-              <h3 className="text-xs font-bold text-white tracking-wide">{setupCardTitle}</h3>
-              <p className="text-xs text-slate-300 leading-relaxed">{setupCardDescription}</p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleOpenGeminiKeyPage}
-              className="min-h-[36px] px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-md"
-            >
-              <KeyRound className="w-3.5 h-3.5" />
-              <span>Get Gemini API Key</span>
-              <ExternalLink className="w-3 h-3" />
-            </button>
-
-            {onOpenTelemetry && (
-              <button
-                type="button"
-                onClick={() => {
-                  soundFx.playClick();
-                  onOpenTelemetry();
-                }}
-                className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#070d14] hover:bg-slate-800 border border-emerald-500/30 text-emerald-200 font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer"
-              >
-                <Settings className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Configure Backend URL</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={handleTestGateway}
-              disabled={isTestingGateway}
-              className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#070d14] hover:bg-slate-800 border border-slate-700 text-slate-200 font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-            >
-              {isTestingGateway ? (
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-400" />
-              ) : (
-                <Wifi className="w-3.5 h-3.5 text-teal-400" />
-              )}
-              <span>{isTestingGateway ? 'Testing...' : 'Test Connection'}</span>
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Messages Area */}
       <div
         ref={chatScrollRef}
@@ -492,41 +381,6 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
                 }`}
               >
                 <div className="whitespace-pre-wrap">{msg.content || '...'}</div>
-
-                {!isOfflineMode &&
-                  isSystem &&
-                  (msg.content.includes('BUDDY Backend Error') ||
-                    msg.content.includes('SURYA Backend Error') ||
-                    msg.content.includes('HTML webpage') ||
-                    msg.content.includes('Server unavailable') ||
-                    msg.content.includes('not configured') ||
-                    msg.content.includes('authentication failed') ||
-                    msg.content.includes('Gemini API') ||
-                    msg.content.includes('Rate limit') ||
-                    msg.content.includes('cookie challenge') ||
-                    msg.content.includes('timed out')) && (
-                    <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleOpenGeminiKeyPage}
-                        className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-md"
-                      >
-                        <KeyRound className="w-3.5 h-3.5" />
-                        <span>Get Gemini API Key</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </button>
-                      {onOpenTelemetry && (
-                        <button
-                          type="button"
-                          onClick={onOpenTelemetry}
-                          className="px-3 py-1.5 rounded-xl bg-[#070d14] border border-emerald-500/30 text-emerald-200 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Settings className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Configure Backend URL</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
 
                 {msg.suggestedAction && (
                   <div className="mt-3 p-3 rounded-2xl bg-[#070d14]/90 border border-emerald-500/25 flex items-center justify-between gap-3 shadow-inner">
@@ -630,6 +484,29 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
             }`}
           >
             <Mic className="w-4 h-4" />
+          </button>
+        )}
+
+        {!isOfflineMode && (
+          <button
+            type="button"
+            onClick={() => {
+              soundFx.playClick();
+              if (liveState.connected || liveState.connecting) {
+                liveApiService.disconnect();
+              } else {
+                liveApiService.connect();
+              }
+            }}
+            aria-label={liveState.connected ? 'End Live Voice' : 'Live Voice'}
+            title={liveState.connected ? 'End Gemini Live Voice' : 'Start Gemini Live Voice'}
+            className={`min-h-[46px] min-w-[46px] rounded-2xl border flex items-center justify-center transition-all cursor-pointer ${
+              liveState.connected
+                ? 'bg-teal-400 text-slate-950 border-teal-200 shadow-[0_0_16px_rgba(45,212,191,0.5)]'
+                : 'bg-[#0b1522]/85 text-teal-300 border-emerald-500/25 hover:border-teal-400/60 shadow-sm'
+            }`}
+          >
+            <Radio className={`w-4 h-4 ${liveState.connected || liveState.connecting ? 'animate-pulse' : ''}`} />
           </button>
         )}
 

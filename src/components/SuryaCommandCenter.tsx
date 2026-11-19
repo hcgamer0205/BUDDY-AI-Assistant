@@ -1,17 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   CheckSquare,
   Eye,
   Code2,
   Settings,
   Send,
-  AlertCircle,
-  ExternalLink,
-  KeyRound,
 } from 'lucide-react';
-import { apiService, ConnectionStatusSnapshot } from '../services/apiService';
-import { deviceBridgeService, GEMINI_API_KEY_URL } from '../services/deviceBridgeService';
-import { intelligenceRouter } from '../services/intelligenceRouter';
 import { soundFx } from '../services/soundFx';
 import { ResponseMode, TabType } from '../types/surya';
 
@@ -21,6 +15,7 @@ interface SuryaCommandCenterProps {
   onChangeResponseMode: (mode: ResponseMode) => void;
   onSendQuickCommand: (text: string) => void;
   onNavigateTab: (tab: TabType) => void;
+  onOpenGeminiSettings?: () => void;
   onOpenBackendSettings?: () => void;
   onOpenVoiceModal: () => void;
   onOpenThemeModal: () => void;
@@ -32,26 +27,9 @@ interface SuryaCommandCenterProps {
 export const SuryaCommandCenter: React.FC<SuryaCommandCenterProps> = ({
   onSendQuickCommand,
   onNavigateTab,
-  onOpenBackendSettings,
   onOpenProductivityModal,
 }) => {
   const [quickPrompt, setQuickPrompt] = useState('');
-  const [connStatus, setConnStatus] = useState<ConnectionStatusSnapshot>(() =>
-    apiService.getConnectionStatus()
-  );
-  const [routerStatus, setRouterStatus] = useState(() => intelligenceRouter.getEffectiveStatus());
-
-  useEffect(() => {
-    const unsubConn = apiService.subscribeConnectionState(setConnStatus);
-    const unsubRouter = intelligenceRouter.subscribe(setRouterStatus);
-    apiService.checkBackendConnection().catch(() => {
-      // Handled via connection state subscription
-    });
-    return () => {
-      unsubConn();
-      unsubRouter();
-    };
-  }, []);
 
   const handleQuickSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,16 +78,6 @@ export const SuryaCommandCenter: React.FC<SuryaCommandCenterProps> = ({
     },
   ];
 
-  const needsSetup =
-    routerStatus.mode !== 'offline' &&
-    routerStatus.activePath !== 'on-device-llm' &&
-    connStatus.state !== 'CONNECTED' &&
-    connStatus.state !== 'CONNECTING' &&
-    (!connStatus.isConfigured ||
-      connStatus.isPreviewUrl ||
-      Boolean(connStatus.lastErrorCode) ||
-      connStatus.state !== 'DISCONNECTED');
-
   return (
     <div className="w-full max-w-md mx-auto px-4 pt-3 pb-24 flex flex-col items-center space-y-5 select-none">
       {/* India Sovereign AI Badge & Greeting */}
@@ -125,56 +93,6 @@ export const SuryaCommandCenter: React.FC<SuryaCommandCenterProps> = ({
           BUDDY Intelligent Operating Environment &amp; Neural Voice Core
         </p>
       </div>
-
-      {/* Initial Online AI Setup Banner when unconfigured or backend error */}
-      {needsSetup && (
-        <div className="w-full p-3.5 rounded-2xl bg-[#0b1522]/85 backdrop-blur-xl border border-amber-500/35 shadow-lg space-y-2.5">
-          <div className="flex items-start gap-2.5 min-w-0">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold text-white">
-                {!connStatus.isConfigured || connStatus.isPreviewUrl
-                  ? 'Online AI is not configured'
-                  : 'Online AI connection requires attention'}
-              </p>
-              <p className="text-[11px] text-slate-300 leading-relaxed mt-0.5">
-                {!connStatus.isConfigured || connStatus.isPreviewUrl
-                  ? 'Configure your Gemini API key on your backend and connect BUDDY to its HTTPS endpoint to enable online AI.'
-                  : connStatus.lastError || `Status: ${connStatus.state.toLowerCase().replace(/_/g, ' ')}.`}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                soundFx.playClick();
-                deviceBridgeService.openExternalUrl(GEMINI_API_KEY_URL);
-              }}
-              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <KeyRound className="w-3.5 h-3.5" />
-              <span>Get Gemini API Key</span>
-              <ExternalLink className="w-3 h-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                soundFx.playClick();
-                if (onOpenBackendSettings) {
-                  onOpenBackendSettings();
-                } else {
-                  onNavigateTab('system');
-                }
-              }}
-              className="min-h-[34px] px-3 py-1.5 rounded-xl bg-[#070d14] hover:bg-slate-800 border border-emerald-500/30 text-emerald-200 font-medium text-xs inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <Settings className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Configure Backend URL</span>
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Emerald Glass Text Command Input */}
       <form onSubmit={handleQuickSubmit} className="w-full flex items-center gap-2.5">

@@ -1,10 +1,12 @@
 import express, { Request, Response, NextFunction } from 'express';
+import http from 'http';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Modality, type LiveServerMessage } from '@google/genai';
+import { WebSocketServer } from 'ws';
 
 dotenv.config();
 
@@ -344,30 +346,139 @@ function shouldFallbackToLite(err: any): boolean {
   );
 }
 
+export function extractInteractionText(interaction: any): string {
+  if (typeof interaction?.output_text === 'string' && interaction.output_text.trim()) {
+    return interaction.output_text;
+  }
+  if (Array.isArray(interaction?.steps)) {
+    const parts: string[] = [];
+    for (const step of interaction.steps) {
+      if (step.type === 'model_output' && Array.isArray(step.content)) {
+        for (const item of step.content) {
+          if (item?.type === 'text' && typeof item.text === 'string') {
+            parts.push(item.text);
+          }
+        }
+      }
+    }
+    if (parts.length > 0) {
+      return parts.join('');
+    }
+  }
+  if (typeof interaction?.text === 'string') {
+    return interaction.text;
+  }
+  return '';
+}
+
+export async function interactionWithFallback(
+  ai: GoogleGenAI,
+  params: {
+    model: string;
+    input?: any;
+    contents?: any;
+    system_instruction?: string;
+    config?: any;
+    response_format?: any;
+    previous_interaction_id?: string;
+    generation_config?: any;
+  },
+  fallbackModel = 'gemini-3.8-flash'
+): Promise<{ text: string; response: any; modelUsed: string; fellBack: boolean; interactionId?: string }> {
+  const resolvedModel = resolveGeminiModelName(params.model);
+  const resolvedFallback = resolveGeminiModelName(fallbackModel);
+
+  // Normalize input across interactions API vs legacy contents
+  let normalizedInput = params.input !== undefined ? params.input : params.contents;
+  if (normalizedInput && typeof normalizedInput === 'object' && !Array.isArray(normalizedInput)) {
+    if (Array.isArray(normalizedInput.parts)) {
+      normalizedInput = normalizedInput.parts.map((p: any) => {
+        if (p.inlineData) {
+          return {
+            type: 'image',
+            data: p.inlineData.data,
+            mime_type: p.inlineData.mimeType || 'image/jpeg',
+          };
+        }
+        if (p.text) {
+          return { type: 'text', text: p.text };
+        }
+        return p;
+      });
+    }
+  }
+
+  const systemInstruction =
+    params.system_instruction ||
+    params.config?.systemInstruction ||
+    undefined;
+
+  let responseFormat = params.response_format;
+  if (!responseFormat && params.config?.responseMimeType === 'application/json') {
+    responseFormat = { type: 'json' };
+  }
+
+  const callInteractions = async (targetModel: string) => {
+    const payload: any = {
+      model: targetModel,
+      input: normalizedInput,
+    };
+    if (systemInstruction) {
+      payload.system_instruction = systemInstruction;
+    }
+    if (responseFormat) {
+      payload.response_format = responseFormat;
+    }
+    if (params.previous_interaction_id) {
+      payload.previous_interaction_id = params.previous_interaction_id;
+    }
+    if (params.generation_config) {
+      payload.generation_config = params.generation_config;
+    }
+    return await ai.interactions.create(payload);
+  };
+
+  try {
+    const interaction =
+      resolvedModel !== resolvedFallback
+        ? await withUpstreamTimeout(
+            callInteractions(resolvedModel),
+            PRIMARY_UPSTREAM_TIMEOUT_MS,
+            `Model ${params.model}`
+          )
+        : await callInteractions(resolvedModel);
+    const text = extractInteractionText(interaction);
+    return {
+      text,
+      response: { ...interaction, text },
+      modelUsed: params.model,
+      fellBack: false,
+      interactionId: interaction?.id,
+    };
+  } catch (err: any) {
+    if (shouldFallbackToLite(err) && resolvedModel !== resolvedFallback) {
+      console.warn(`[BUDDY Interactions] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
+      const interaction = await callInteractions(resolvedFallback);
+      const text = extractInteractionText(interaction);
+      return {
+        text,
+        response: { ...interaction, text },
+        modelUsed: fallbackModel,
+        fellBack: true,
+        interactionId: interaction?.id,
+      };
+    }
+    throw err;
+  }
+}
+
 export async function generateWithFallback(
   ai: GoogleGenAI,
   params: { model: string; contents: any; config?: any },
   fallbackModel = 'gemini-3.8-flash'
 ) {
-  const resolvedModel = resolveGeminiModelName(params.model);
-  const resolvedFallback = resolveGeminiModelName(fallbackModel);
-  const actualParams = { ...params, model: resolvedModel };
-  try {
-    if (resolvedModel !== resolvedFallback) {
-      return await withUpstreamTimeout(
-        ai.models.generateContent(actualParams),
-        PRIMARY_UPSTREAM_TIMEOUT_MS,
-        `Model ${params.model}`
-      );
-    }
-    return await ai.models.generateContent(actualParams);
-  } catch (err: any) {
-    if (shouldFallbackToLite(err) && resolvedModel !== resolvedFallback) {
-      console.warn(`[BUDDY Gemini] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
-      return await ai.models.generateContent({ ...actualParams, model: resolvedFallback });
-    }
-    throw err;
-  }
+  const result = await interactionWithFallback(ai, params, fallbackModel);
+  return result.response;
 }
 
 async function generateWithFallbackMeta(
@@ -375,27 +486,8 @@ async function generateWithFallbackMeta(
   params: { model: string; contents: any; config?: any },
   fallbackModel = 'gemini-3.8-flash'
 ): Promise<{ response: any; modelUsed: string; fellBack: boolean }> {
-  const resolvedModel = resolveGeminiModelName(params.model);
-  const resolvedFallback = resolveGeminiModelName(fallbackModel);
-  const actualParams = { ...params, model: resolvedModel };
-  try {
-    const response =
-      resolvedModel !== resolvedFallback
-        ? await withUpstreamTimeout(
-            ai.models.generateContent(actualParams),
-            PRIMARY_UPSTREAM_TIMEOUT_MS,
-            `Model ${params.model}`
-          )
-        : await ai.models.generateContent(actualParams);
-    return { response, modelUsed: params.model, fellBack: false };
-  } catch (err: any) {
-    if (shouldFallbackToLite(err) && resolvedModel !== resolvedFallback) {
-      console.warn(`[BUDDY Gemini] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
-      const response = await ai.models.generateContent({ ...actualParams, model: resolvedFallback });
-      return { response, modelUsed: fallbackModel, fellBack: true };
-    }
-    throw err;
-  }
+  const result = await interactionWithFallback(ai, params, fallbackModel);
+  return { response: result.response, modelUsed: result.modelUsed, fellBack: result.fellBack };
 }
 
 // Sensitive Information Redaction Filters
@@ -776,15 +868,13 @@ app.post('/api/config/api-key/verify', async (req: Request, res: Response) => {
 
   try {
     const startTime = Date.now();
-    const { response, modelUsed, fellBack } = await generateWithFallbackMeta(ai, {
+    const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
-      contents: 'Reply concisely in under 8 words confirming you are active for BUDDY gateway verification.',
-      config: {
-        systemInstruction: 'You are BUDDY backend health verification. Reply briefly confirming status.',
-      },
+      input: 'Reply concisely in under 8 words confirming you are active for BUDDY gateway verification.',
+      system_instruction: 'You are BUDDY backend health verification. Reply briefly confirming status.',
     });
     const latencyMs = Date.now() - startTime;
-    const text = (response.text || '').trim();
+    const text = (meta.text || '').trim();
     if (!text) {
       return res.status(502).json({
         success: false,
@@ -793,9 +883,9 @@ app.post('/api/config/api-key/verify', async (req: Request, res: Response) => {
     }
     return res.json({
       success: true,
-      model: modelUsed,
-      resolvedUpstreamModel: resolveGeminiModelName(modelUsed),
-      fallbackUsed: fellBack,
+      model: meta.modelUsed,
+      resolvedUpstreamModel: resolveGeminiModelName(meta.modelUsed),
+      fallbackUsed: meta.fellBack,
       latencyMs,
       response: sanitizeContent(text),
     });
@@ -871,7 +961,9 @@ Local Time: ${new Date().toLocaleTimeString()}`;
   return instruction;
 }
 
-// 3. Ultra-Fast Real-Time Response Streaming via Server-Sent Events (SSE)
+const userLastInteractionMap = new Map<string, string>();
+
+// 3. Ultra-Fast Real-Time Response Streaming via Server-Sent Events (SSE) & Interactions API
 app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) => {
   const {
     message,
@@ -883,6 +975,7 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
     autoFallback = true,
     userMemories = [],
     deviceContext,
+    previousInteractionId,
   } = req.body;
 
   if (!message || typeof message !== 'string') {
@@ -930,64 +1023,77 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
     deviceContext
   );
 
-  // Build conversation history
-  const historySlice = resolvedMode === 'concise' ? history.slice(-6) : history.slice(-12);
-  const contents: any[] = [];
-  for (const msg of historySlice) {
-    if (msg && typeof msg.content === 'string' && (msg.role === 'user' || msg.role === 'assistant')) {
-      contents.push({
-        role: msg.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: sanitizeContent(msg.content.slice(0, 1500)) }],
-      });
-    }
+  const userNs = getUserNamespace(req);
+  const resolvedPrevId =
+    typeof previousInteractionId === 'string' && previousInteractionId.trim()
+      ? previousInteractionId.trim()
+      : userLastInteractionMap.get(userNs);
+
+  if (Array.isArray(history) && history.length === 0) {
+    userLastInteractionMap.delete(userNs);
   }
-  contents.push({
-    role: 'user',
-    parts: [{ text: cleanMessage }],
-  });
+
+  // Build input prompt preserving conversation context
+  const historySlice = resolvedMode === 'concise' ? history.slice(-6) : history.slice(-12);
+  let promptInput: any = cleanMessage;
+  if (!resolvedPrevId && historySlice.length > 0) {
+    const formattedHistory = historySlice
+      .filter((msg: any) => msg && typeof msg.content === 'string' && (msg.role === 'user' || msg.role === 'assistant'))
+      .map((msg: any) => `${msg.role === 'assistant' ? 'Assistant' : 'User'}: ${sanitizeContent(msg.content.slice(0, 1500))}`)
+      .join('\n');
+    promptInput = `Conversation Context:\n${formattedHistory}\n\nCurrent User Query:\n${cleanMessage}`;
+  }
 
   const startTime = Date.now();
   let firstTokenTime: number | null = null;
   let activeModel = model;
   let tokenCount = 0;
+  let activeInteractionId = '';
 
   sendSSE({ type: 'start', model: activeModel, timestamp: new Date().toISOString() });
 
-  // Function to stream from a given model
+  // Function to stream from a given model via Interactions API
   const streamFromModel = async (targetModel: string): Promise<boolean> => {
     try {
       const resolvedTarget = resolveGeminiModelName(targetModel);
-      const streamInitPromise = ai.models.generateContentStream({
+      const streamPromise = ai.interactions.create({
         model: resolvedTarget,
-        contents,
-        config: {
-          systemInstruction,
-        },
+        input: promptInput,
+        system_instruction: systemInstruction,
+        stream: true,
+        ...(resolvedPrevId ? { previous_interaction_id: resolvedPrevId } : {}),
       });
+
       const streamResponse =
         targetModel !== 'gemini-3.8-flash'
-          ? await withUpstreamTimeout(streamInitPromise, PRIMARY_UPSTREAM_TIMEOUT_MS, `Stream ${targetModel}`)
-          : await streamInitPromise;
+          ? await withUpstreamTimeout(streamPromise, PRIMARY_UPSTREAM_TIMEOUT_MS, `Stream ${targetModel}`)
+          : await streamPromise;
 
-      const iterator = streamResponse[Symbol.asyncIterator]();
-      while (true) {
+      for await (const event of streamResponse) {
         if (clientDisconnected) break;
-        const nextPromise = iterator.next();
-        const step =
-          firstTokenTime === null && targetModel !== 'gemini-3.8-flash'
-            ? await withUpstreamTimeout(nextPromise, PRIMARY_UPSTREAM_TIMEOUT_MS, `First chunk ${targetModel}`)
-            : await nextPromise;
-        if (step.done) break;
-        const chunk = step.value;
-        const text = chunk?.text || '';
-        if (text) {
-          if (firstTokenTime === null) {
-            firstTokenTime = Date.now() - startTime;
-            sendSSE({ type: 'ttft', ttftMs: firstTokenTime });
+        if (event.event_type === 'step.delta' && event.delta?.type === 'text') {
+          const text = event.delta.text || '';
+          if (text) {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now() - startTime;
+              sendSSE({ type: 'ttft', ttftMs: firstTokenTime });
+            }
+            tokenCount++;
+            sendSSE({ type: 'chunk', text: sanitizeContent(text) });
           }
-          tokenCount++;
-          sendSSE({ type: 'chunk', text: sanitizeContent(text) });
+        } else if (event.event_type === 'interaction.created' && (event as any).interaction_id) {
+          activeInteractionId = (event as any).interaction_id;
+        } else if (event.event_type === 'interaction.status_update' && (event as any).interaction_id) {
+          activeInteractionId = (event as any).interaction_id;
+        } else if (event.event_type === 'interaction.completed') {
+          if ((event as any).interaction?.id) {
+            activeInteractionId = (event as any).interaction.id;
+          }
         }
+      }
+
+      if (activeInteractionId) {
+        userLastInteractionMap.set(userNs, activeInteractionId);
       }
 
       if (tokenCount === 0 && !clientDisconnected && autoFallback && targetModel !== 'gemini-3.8-flash') {
@@ -996,7 +1102,7 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
           type: 'fallback',
           originalModel: targetModel,
           fallbackModel: fallbackTarget,
-          reason: 'Zero output tokens received from primary model; routing to Flash Lite.',
+          reason: 'Zero output tokens received from primary model; routing to Flash.',
         });
         activeModel = fallbackTarget;
         return await streamFromModel(fallbackTarget);
@@ -1039,13 +1145,14 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
       totalTimeMs,
       firstTokenMs: firstTokenTime || totalTimeMs,
       tokenCount,
+      interactionId: activeInteractionId,
     });
   }
 
   res.end();
 });
 
-// 4. Standard Non-Streaming Chat Endpoint (for compatibility)
+// 4. Standard Non-Streaming Chat Endpoint (for compatibility) via Interactions API
 app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
   const {
     message,
@@ -1057,6 +1164,7 @@ app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
     autoFallback = true,
     userMemories = [],
     deviceContext,
+    previousInteractionId,
   } = req.body;
 
   if (!message || typeof message !== 'string') {
@@ -1082,58 +1190,55 @@ app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
       deviceContext
     );
 
-    const historySlice = resolvedMode === 'concise' ? history.slice(-6) : history.slice(-12);
-    const contents: any[] = [];
-    for (const msg of historySlice) {
-      if (msg && typeof msg.content === 'string' && (msg.role === 'user' || msg.role === 'assistant')) {
-        contents.push({
-          role: msg.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: sanitizeContent(msg.content.slice(0, 1500)) }],
-        });
-      }
+    const userNs = getUserNamespace(req);
+    const resolvedPrevId =
+      typeof previousInteractionId === 'string' && previousInteractionId.trim()
+        ? previousInteractionId.trim()
+        : userLastInteractionMap.get(userNs);
+
+    if (Array.isArray(history) && history.length === 0) {
+      userLastInteractionMap.delete(userNs);
     }
-    contents.push({
-      role: 'user',
-      parts: [{ text: cleanMessage }],
-    });
+
+    const historySlice = resolvedMode === 'concise' ? history.slice(-6) : history.slice(-12);
+    let promptInput: any = cleanMessage;
+    if (!resolvedPrevId && historySlice.length > 0) {
+      const formattedHistory = historySlice
+        .filter((msg: any) => msg && typeof msg.content === 'string' && (msg.role === 'user' || msg.role === 'assistant'))
+        .map((msg: any) => `${msg.role === 'assistant' ? 'Assistant' : 'User'}: ${sanitizeContent(msg.content.slice(0, 1500))}`)
+        .join('\n');
+      promptInput = `Conversation Context:\n${formattedHistory}\n\nCurrent User Query:\n${cleanMessage}`;
+    }
 
     const startTime = Date.now();
-    let activeModel = model;
-    let responseText = '';
+    const meta = await interactionWithFallback(
+      ai,
+      {
+        model: model || 'gemini-4-hydrogen',
+        input: promptInput,
+        system_instruction: systemInstruction,
+        ...(resolvedPrevId ? { previous_interaction_id: resolvedPrevId } : {}),
+      },
+      'gemini-3.8-flash'
+    );
 
-    if (autoFallback && activeModel !== 'gemini-3.8-flash') {
-      const meta = await generateWithFallbackMeta(
-        ai,
-        {
-          model: activeModel,
-          contents,
-          config: { systemInstruction },
-        },
-        'gemini-3.8-flash'
-      );
-      activeModel = meta.modelUsed;
-      responseText = meta.response?.text || '';
-    } else {
-      const response = await ai.models.generateContent({
-        model: resolveGeminiModelName(activeModel),
-        contents,
-        config: { systemInstruction },
-      });
-      responseText = response.text || '';
+    if (meta.interactionId) {
+      userLastInteractionMap.set(userNs, meta.interactionId);
     }
 
     const latencyMs = Date.now() - startTime;
-    if (!responseText.trim()) {
+    if (!meta.text.trim()) {
       return res.status(502).json({
         error: 'Upstream Gemini model returned an empty response.',
       });
     }
 
     return res.json({
-      text: sanitizeContent(responseText),
-      model: activeModel,
+      text: sanitizeContent(meta.text),
+      model: meta.modelUsed,
       latencyMs,
       timestamp: new Date().toISOString(),
+      interactionId: meta.interactionId,
     });
   } catch (error: any) {
     const classified = classifyGeminiUpstreamError(error);
@@ -1158,24 +1263,26 @@ app.post('/api/vision', visionLimiter, async (req: Request, res: Response) => {
 
   const ai = getGeminiClient();
   if (!ai) {
-    return res.status(503).json({ error: 'Gemini AI service unavailable.' });
+    return res.status(503).json({
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'Gemini AI service unavailable. Configure GEMINI_API_KEY in your backend server environment.',
+    });
   }
 
   try {
     const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
 
-    const { response, modelUsed } = await generateWithFallbackMeta(ai, {
+    const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: cleanBase64,
-            },
-          },
-          {
-            text: `You are BUDDY Standard Optics AR HUD visual processor.
+      input: [
+        {
+          type: 'image',
+          data: cleanBase64,
+          mime_type: 'image/jpeg',
+        },
+        {
+          type: 'text',
+          text: `You are BUDDY Standard Optics AR HUD visual processor.
 ${prompt}
 Format your findings with clean, structured sections:
 1. OPTICAL SUMMARY: 1-2 concise sentences describing the field of view.
@@ -1183,25 +1290,25 @@ Format your findings with clean, structured sections:
 3. TEXT RECOGNITION (OCR): readable labels, numbers, or signage in any script.
 4. HUD ADVISORY: context note.
 Strictly ensure all telemetry remains peaceful, analytical, non-operational, and benign. Never produce weaponized instructions.`,
-          },
-        ],
-      },
+        },
+      ],
     });
 
-    const telemetry = (response.text || '').trim();
+    const telemetry = meta.text.trim();
     if (!telemetry) {
       return res.status(502).json({ error: 'Upstream vision model returned empty optical telemetry.' });
     }
 
     return res.json({
       telemetry: sanitizeContent(telemetry),
-      model: modelUsed,
+      model: meta.modelUsed,
       timestamp: new Date().toISOString(),
     });
   } catch (error: any) {
-    const status = error?.status === 429 ? 429 : error?.status === 503 ? 503 : 502;
-    return res.status(status).json({
-      error: sanitizeContent(error?.message || 'Failed to process optical image analysis.'),
+    const classified = classifyGeminiUpstreamError(error);
+    return res.status(classified.status).json({
+      code: classified.code,
+      error: classified.message,
     });
   }
 });
@@ -1574,12 +1681,12 @@ Do NOT claim autonomous code execution.`;
   }
 
   try {
-    const { response } = await generateWithFallbackMeta(ai, {
+    const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
-      contents: prompt,
+      input: prompt,
     });
     return res.json({
-      report: sanitizeContent(response.text || 'Advisory generated.'),
+      report: sanitizeContent(meta.text || 'Advisory generated.'),
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
@@ -1597,7 +1704,11 @@ app.post('/api/vision/analyze', visionLimiter, async (req: Request, res: Respons
 
   const ai = getGeminiClient();
   if (!ai) {
-    return res.status(503).json({ error: 'Gemini AI service unavailable.' });
+    return res.status(503).json({
+      success: false,
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'Gemini AI service unavailable. Configure GEMINI_API_KEY in your backend server environment.',
+    });
   }
 
   try {
@@ -1633,37 +1744,52 @@ Analyze this image frame and output a strictly valid JSON object matching this s
   "documentFields": [{ "label": "Key", "value": "Extracted Value" }],
   "hudAdvisory": "Helpful contextual advisory note"
 }
-Ensure all box coordinates are percentages (0 to 100). Keep all analysis strictly peaceful, safe, educational, and non-weaponized.`;
+Ensure all box coordinates are percentages (0 to 100). Keep all analysis strictly peaceful, safe, educational, and non-weaponized. Return strictly valid JSON.`;
 
-    const { response } = await generateWithFallbackMeta(ai, {
+    const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: cleanBase64,
-            },
-          },
-          { text: prompt },
-        ],
-      },
-      config: {
-        responseMimeType: 'application/json',
-      },
+      input: [
+        {
+          type: 'image',
+          data: cleanBase64,
+          mime_type: 'image/jpeg',
+        },
+        {
+          type: 'text',
+          text: prompt,
+        },
+      ],
+      response_format: { type: 'json' },
     });
 
-    const parsedJson = JSON.parse(response.text || '{}');
+    let parsedJson: any = {};
+    try {
+      let cleaned = meta.text.trim();
+      cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
+      parsedJson = JSON.parse(cleaned);
+    } catch {
+      parsedJson = {
+        summary: meta.text || 'Visual perception frame processed.',
+        entities: [],
+        ocrText: '',
+        ocrTranslation: '',
+        qrPayloads: [],
+        documentFields: [],
+        hudAdvisory: 'Scene analyzed successfully.',
+      };
+    }
+
     return res.json({
       success: true,
       analysis: parsedJson,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
-    const status = err?.status === 429 ? 429 : err?.status === 503 ? 503 : 502;
-    return res.status(status).json({
+    const classified = classifyGeminiUpstreamError(err);
+    return res.status(classified.status).json({
       success: false,
-      error: sanitizeContent(err?.message || 'Optical vision analysis failed upstream.'),
+      code: classified.code,
+      error: classified.message,
     });
   }
 });
@@ -1678,33 +1804,36 @@ app.post('/api/vision/chat', visionLimiter, async (req: Request, res: Response) 
 
   const ai = getGeminiClient();
   if (!ai) {
-    return res.status(503).json({ error: 'Gemini AI service unavailable.' });
+    return res.status(503).json({
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'Gemini AI service unavailable. Configure GEMINI_API_KEY in your backend server environment.',
+    });
   }
 
   try {
-    const parts: any[] = [];
+    const input: any[] = [];
     if (imageBase64 && typeof imageBase64 === 'string') {
       const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
-      parts.push({
-        inlineData: {
-          mimeType: 'image/jpeg',
-          data: cleanBase64,
-        },
+      input.push({
+        type: 'image',
+        data: cleanBase64,
+        mime_type: 'image/jpeg',
       });
     }
 
-    parts.push({
+    input.push({
+      type: 'text',
       text: `You are BUDDY Vision conversational assistant. The user is looking at this camera view and asked:
 "${sanitizeContent(question)}"
 Answer clearly, concisely, and knowledgeably, directly referencing what is visible in the scene. Explain machines, text, plants, landmarks, or electronic components as requested.`,
     });
 
-    const { response } = await generateWithFallbackMeta(ai, {
+    const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
-      contents: { parts },
+      input,
     });
 
-    const answer = (response.text || '').trim();
+    const answer = meta.text.trim();
     if (!answer) {
       return res.status(502).json({ error: 'Upstream vision chat returned empty output.' });
     }
@@ -1714,8 +1843,11 @@ Answer clearly, concisely, and knowledgeably, directly referencing what is visib
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
-    const status = err?.status === 429 ? 429 : err?.status === 503 ? 503 : 502;
-    return res.status(status).json({ error: sanitizeContent(err?.message || 'Failed to answer visual question.') });
+    const classified = classifyGeminiUpstreamError(err);
+    return res.status(classified.status).json({
+      code: classified.code,
+      error: classified.message,
+    });
   }
 });
 
@@ -2124,29 +2256,35 @@ app.post('/api/apps/generate', async (req: Request, res: Response) => {
 
   const ai = getGeminiClient();
   if (!ai) {
-    return res.status(503).json({ error: 'Gemini AI service unavailable for Studio generation.' });
+    return res.status(503).json({
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'Gemini AI service unavailable for Studio generation. Configure GEMINI_API_KEY in your backend server environment.',
+    });
   }
 
   const appId = `app_${Date.now()}`;
   let previewHtml = '';
 
   try {
-    const codePrompt = `You are SURYA App Creator. The user wants to build an application: "${sanitizeContent(prompt)}".
+    const codePrompt = `You are BUDDY App Creator. The user wants to build an application: "${sanitizeContent(prompt)}".
 Generate a complete, fully functional, beautiful single-page web app with Tailwind CSS.
 Include interactive elements, working javascript state, buttons, forms, and responsive mobile-first UI.
 Return ONLY valid HTML inside an <html> document with embedded <script> and Tailwind CDN.`;
 
-    const { response } = await generateWithFallbackMeta(ai, {
+    const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
-      contents: codePrompt,
+      input: codePrompt,
     });
 
-    let rawCode = response.text || '';
+    let rawCode = meta.text || '';
     rawCode = rawCode.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
     previewHtml = rawCode;
   } catch (err: any) {
-    const status = err?.status === 429 ? 429 : err?.status === 503 ? 503 : 502;
-    return res.status(status).json({ error: sanitizeContent(err?.message || 'Studio generation failed upstream.') });
+    const classified = classifyGeminiUpstreamError(err);
+    return res.status(classified.status).json({
+      code: classified.code,
+      error: classified.message,
+    });
   }
 
   if (!previewHtml || previewHtml.length < 40) {
@@ -2188,11 +2326,14 @@ app.post('/api/apps/:id/modify', async (req: Request, res: Response) => {
 
   const ai = getGeminiClient();
   if (!ai) {
-    return res.status(503).json({ error: 'Gemini AI service unavailable for Studio modification.' });
+    return res.status(503).json({
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'Gemini AI service unavailable for Studio modification. Configure GEMINI_API_KEY in your backend server environment.',
+    });
   }
 
   try {
-    const editPrompt = `You are SURYA App Creator. The current HTML code of the app is:
+    const editPrompt = `You are BUDDY App Creator. The current HTML code of the app is:
 ${appRecord.previewHtml.slice(0, 6000)}
 
 The user asks to modify the app:
@@ -2200,12 +2341,12 @@ The user asks to modify the app:
 
 Return the UPDATED complete standalone HTML code. Return ONLY valid HTML with embedded script and styling.`;
 
-    const { response } = await generateWithFallbackMeta(ai, {
+    const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
-      contents: editPrompt,
+      input: editPrompt,
     });
 
-    let updatedHtml = response.text || '';
+    let updatedHtml = meta.text || '';
     updatedHtml = updatedHtml.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
     if (updatedHtml.length <= 50) {
       return res.status(502).json({ error: 'Upstream AI model returned insufficient modified HTML.' });
@@ -2214,8 +2355,11 @@ Return the UPDATED complete standalone HTML code. Return ONLY valid HTML with em
     const htmlFile = appRecord.files.find((f) => f.path === 'index.html');
     if (htmlFile) htmlFile.content = updatedHtml;
   } catch (err: any) {
-    const status = err?.status === 429 ? 429 : err?.status === 503 ? 503 : 502;
-    return res.status(status).json({ error: sanitizeContent(err?.message || 'Studio modification failed upstream.') });
+    const classified = classifyGeminiUpstreamError(err);
+    return res.status(classified.status).json({
+      code: classified.code,
+      error: classified.message,
+    });
   }
 
   appRecord.lastModified = new Date().toISOString();
@@ -2238,11 +2382,14 @@ app.post('/api/apps/debug', async (req: Request, res: Response) => {
 
   const ai = getGeminiClient();
   if (!ai) {
-    return res.status(503).json({ error: 'Gemini AI service unavailable for code debugging.' });
+    return res.status(503).json({
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'Gemini AI service unavailable for code debugging. Configure GEMINI_API_KEY in your backend server environment.',
+    });
   }
 
   try {
-    const debugPrompt = `You are SURYA Studio Code Debugger. Analyze this sandboxed HTML/JS application and runtime error log.
+    const debugPrompt = `You are BUDDY Studio Code Debugger. Analyze this sandboxed HTML/JS application and runtime error log.
 Runtime Error / Issue: ${sanitizeContent(String(errorLog || description || 'General inspection requested'))}
 Source Code:
 ${html.slice(0, 8000)}
@@ -2254,13 +2401,20 @@ Return JSON with:
   "patchedHtml": "Complete corrected standalone HTML document"
 }`;
 
-    const response = await generateWithFallback(ai, {
+    const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
-      contents: debugPrompt,
-      config: { responseMimeType: 'application/json' },
+      input: debugPrompt,
+      response_format: { type: 'json' },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    let parsed: any = {};
+    try {
+      let cleaned = meta.text.trim();
+      cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
+      parsed = JSON.parse(cleaned);
+    } catch {
+      parsed = { diagnosis: meta.text, fixes: [], patchedHtml: html };
+    }
     return res.json({
       success: true,
       diagnosis: sanitizeContent(parsed.diagnosis || 'Diagnostics complete.'),
@@ -2268,7 +2422,11 @@ Return JSON with:
       patchedHtml: typeof parsed.patchedHtml === 'string' && parsed.patchedHtml.trim().length > 40 ? parsed.patchedHtml : html,
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Debug analysis failed.' });
+    const classified = classifyGeminiUpstreamError(err);
+    return res.status(classified.status).json({
+      code: classified.code,
+      error: classified.message,
+    });
   }
 });
 
@@ -2338,11 +2496,14 @@ app.post('/api/agents/orchestrate', chatLimiter, async (req: Request, res: Respo
 
   const ai = getGeminiClient();
   if (!ai) {
-    return res.status(503).json({ error: 'Gemini service unavailable for AI planning.' });
+    return res.status(503).json({
+      code: 'GEMINI_AUTH_FAILED',
+      error: 'Gemini service unavailable for AI planning. Configure GEMINI_API_KEY in your backend server environment.',
+    });
   }
 
   try {
-    const orchestrationPrompt = `You are SURYA Multi-Agent Orchestrator. Decompose the user goal into 3-5 verifiable execution steps.
+    const orchestrationPrompt = `You are BUDDY Multi-Agent Orchestrator. Decompose the user goal into 3-5 verifiable execution steps.
 Available specialized agents:
 - agent_conversation (Core Conversation)
 - agent_context (Context & Personalization)
@@ -2350,7 +2511,7 @@ Available specialized agents:
 - agent_productivity (Productivity: creates tasks, notes, reminders, automations)
 - agent_vision (Vision: camera OCR, object analysis)
 - agent_research (Research: knowledge synthesis)
-- agent_coding (Coding: SURYA Studio sandboxed app generation)
+- agent_coding (Coding: BUDDY Studio sandboxed app generation)
 - agent_knowledge (Knowledge: Personal World Model & Vault queries)
 - agent_diagnostics (Diagnostics: system health & telemetry)
 - agent_verification (Verification: must be final step auditing outcomes)
@@ -2374,20 +2535,31 @@ Return valid JSON matching:
   ]
 }`;
 
-    const response = await generateWithFallback(ai, {
+    const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
-      contents: orchestrationPrompt,
-      config: { responseMimeType: 'application/json' },
+      input: orchestrationPrompt,
+      response_format: { type: 'json' },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    let parsed: any = {};
+    try {
+      let cleaned = meta.text.trim();
+      cleaned = cleaned.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
+      parsed = JSON.parse(cleaned);
+    } catch {
+      parsed = { intent: 'conversation', summary: meta.text, subtasks: [] };
+    }
     return res.json({
       success: true,
       plan: parsed,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Orchestration synthesis error.' });
+    const classified = classifyGeminiUpstreamError(err);
+    return res.status(classified.status).json({
+      code: classified.code,
+      error: classified.message,
+    });
   }
 });
 
@@ -2425,6 +2597,76 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   return res.status(500).json({ error: 'Internal server error.' });
 });
 
+// Live API Real-Time Audio WebSocket Bridge
+const httpServer = http.createServer(app);
+const wss = new WebSocketServer({ server: httpServer, path: '/api/live' });
+
+wss.on('connection', async (clientWs) => {
+  const ai = getGeminiClient();
+  if (!ai) {
+    clientWs.send(JSON.stringify({ error: 'Gemini AI service unavailable. Server GEMINI_API_KEY is not configured.' }));
+    clientWs.close();
+    return;
+  }
+
+  try {
+    const session = await ai.live.connect({
+      model: 'gemini-3.8-live',
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
+        },
+        systemInstruction: 'You are BUDDY, an intelligent, poised, and helpful AI assistant.',
+      },
+      callbacks: {
+        onmessage: (message: LiveServerMessage) => {
+          for (const part of message.serverContent?.modelTurn?.parts ?? []) {
+            if (part.inlineData?.data) {
+              clientWs.send(JSON.stringify({ audio: part.inlineData.data }));
+            }
+          }
+          if (message.serverContent?.interrupted) {
+            clientWs.send(JSON.stringify({ interrupted: true }));
+          }
+        },
+        onerror: (err: any) => {
+          console.warn('[BUDDY Live API] Live session error:', err?.message || err);
+          try {
+            clientWs.send(JSON.stringify({ error: err?.message || 'Live session error' }));
+          } catch (_) {}
+        },
+        onclose: () => {
+          try { clientWs.close(); } catch (_) {}
+        },
+      },
+    });
+
+    clientWs.on('message', (data: any) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.audio) {
+          session.sendRealtimeInput({
+            audio: { data: msg.audio, mimeType: 'audio/pcm;rate=16000' },
+          });
+        }
+      } catch (err) {
+        // parse error ignored
+      }
+    });
+
+    clientWs.on('close', () => {
+      try { session.close(); } catch (_) {}
+    });
+  } catch (err: any) {
+    console.error('[BUDDY Live API] Failed to connect:', err);
+    try {
+      clientWs.send(JSON.stringify({ error: err?.message || 'Failed to initialize live session' }));
+      clientWs.close();
+    } catch (_) {}
+  }
+});
+
 // Vite middleware mounting in development
 export async function startServer() {
   if (process.env.NODE_ENV !== 'production' && process.env.SURYA_SKIP_VITE !== '1') {
@@ -2448,7 +2690,7 @@ export async function startServer() {
     });
   }
 
-  return app.listen(PORT, '0.0.0.0', () => {
+  return httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`[BUDDY Mobile] Server listening on http://0.0.0.0:${PORT}`);
   });
 }
@@ -2460,4 +2702,4 @@ if (process.env.SURYA_SKIP_LISTEN !== '1') {
   });
 }
 
-export { app };
+export { app, httpServer as server };

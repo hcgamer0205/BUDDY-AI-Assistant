@@ -48,6 +48,9 @@ export const AppCreatorWorkspace: React.FC = () => {
 
   const loadStudioApps = async () => {
     try {
+      if (!apiService.isBackendConfigured()) {
+        throw new Error('Local starter');
+      }
       const res = await apiService.getStudioApps();
       if (Array.isArray(res.apps) && res.apps.length > 0) {
         setApps(res.apps);
@@ -159,7 +162,7 @@ export const AppCreatorWorkspace: React.FC = () => {
       soundFx.playAuthorize();
     } catch (err: any) {
       soundFx.playAbort();
-      setStatusMessage(`Generation error: ${err?.message || 'Backend unavailable'}`);
+      setStatusMessage(`Generation error: ${err?.message || 'Unable to generate app'}`);
     } finally {
       setIsGenerating(false);
     }

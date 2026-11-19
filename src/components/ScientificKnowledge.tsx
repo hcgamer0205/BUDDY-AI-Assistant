@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BookOpen, Search, Atom, Sparkles, RefreshCw, ChevronRight } from 'lucide-react';
 import { ScientificArticle } from '../types/surya';
 import { apiService } from '../services/apiService';
+import { modelPreferenceService } from '../services/modelPreferenceService';
 import { soundFx } from '../services/soundFx';
 
 export const ScientificKnowledge: React.FC = () => {
@@ -41,11 +42,11 @@ export const ScientificKnowledge: React.FC = () => {
     setIsLoadingDeepDive(true);
     setAiDeepDive(null);
     try {
-      const res = await apiService.sendChatMessage(
-        `Provide an advanced scientific breakdown of: "${art.title}" (${art.domain}).
-Explain the underlying physics/mathematics, core telemetry equation (${art.telemetryFormula}), and practical applications in high-performance engineering.`,
-        []
-      );
+      const prompt = `Provide an advanced scientific breakdown of: "${art.title}" (${art.domain}).
+Explain the underlying physics/mathematics, core telemetry equation (${art.telemetryFormula}), and practical applications in high-performance engineering.`;
+      const res = await apiService.sendChatMessage(prompt, [], {
+        model: modelPreferenceService.getSelectedModel(),
+      });
       soundFx.playAuthorize();
       setAiDeepDive(res.text);
     } catch (err: any) {

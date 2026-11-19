@@ -35,7 +35,9 @@ import { Navigation } from './components/Navigation';
 
 import { voiceService } from './services/voiceService';
 import { soundFx } from './services/soundFx';
-import { apiService, ConnectionStatusSnapshot, GatewayHttpError } from './services/apiService';
+import { apiService, GatewayHttpError, ConnectionStatusSnapshot } from './services/apiService';
+import { modelPreferenceService } from './services/modelPreferenceService';
+import { liveApiService } from './services/liveApiService';
 import { uiThemeEngine } from './services/uiThemeEngine';
 import { voiceProfileManager } from './services/voiceProfileManager';
 import { wakeWordService } from './services/wakeWordService';
@@ -51,7 +53,7 @@ const WELCOME_MESSAGE = (): ChatMessage => ({
   id: 'init_1',
   role: 'assistant',
   content:
-    'BUDDY ready. Ask a question, issue a voice command, manage tasks, or switch between Cloud Gemini and On-Device Offline AI anytime.',
+    'BUDDY ready. Connected via server-side Gemini Interactions API, with independent On-Device Offline AI always available.',
   timestamp: new Date().toISOString(),
   model: 'BUDDY Command Core',
 });
@@ -79,10 +81,11 @@ export default function App() {
   const [systemOpenSection, setSystemOpenSection] = useState<SettingsSectionId | null>(null);
   const [currentTheme, setCurrentTheme] = useState<SuryaThemeConfig>(uiThemeEngine.getCurrentTheme());
   const [isPreviewActive, setIsPreviewActive] = useState<boolean>(uiThemeEngine.isPreviewActive());
-  const [activeModel, setActiveModel] = useState('gemini-4-hydrogen');
   const [connStatus, setConnStatus] = useState<ConnectionStatusSnapshot>(() =>
     apiService.getConnectionStatus()
   );
+  const [activeModel, setActiveModel] = useState(() => modelPreferenceService.getSelectedModel());
+  const [liveState, setLiveState] = useState(() => liveApiService.getState());
   const [routerStatus, setRouterStatus] = useState(() => intelligenceRouter.getEffectiveStatus());
 
   const [responseMode, setResponseMode] = useState<ResponseMode>(() => {
@@ -232,20 +235,21 @@ export default function App() {
       soundFx.playAuthorize();
     } catch (err: any) {
       soundFx.playAbort();
-      const errMsg = err?.message || 'Communication error.';
-      const isGatewayFailure =
+      const rawMsg = String(err?.message || 'Communication error.');
+      const errMsg = rawMsg.replace(/AIza[0-9A-Za-z_-]{16,}/g, '[REDACTED]');
+      const isConnectionFailure =
         err instanceof GatewayHttpError ||
-        /Backend Error|Offline Setup|not configured|timed out|unavailable|authentication failed|Cookie check|Rate limit/i.test(
+        /Gemini|Rate limit|Quota|model|unavailable|timed out|Network|not configured|authentication failed/i.test(
           errMsg
         );
       setMessages((prev) => {
-        const filtered = isGatewayFailure
+        const filtered = isConnectionFailure
           ? prev.filter(
               (m) =>
                 !m.id.startsWith('gateway_err_') &&
                 !(
                   m.role === 'system' &&
-                  /BUDDY Backend Error|SURYA Backend Error|not configured|timed out|Server unavailable|authentication failed/i.test(
+                  /Gemini|Rate limit|Quota|not configured|timed out|unavailable|authentication failed/i.test(
                     m.content
                   )
                 )
@@ -255,7 +259,7 @@ export default function App() {
           m.id === assistantId
             ? {
                 ...m,
-                id: isGatewayFailure ? `gateway_err_${Date.now()}` : m.id,
+                id: isConnectionFailure ? `gateway_err_${Date.now()}` : m.id,
                 role: 'system',
                 content: `BUDDY Notice: ${errMsg}`,
               }
@@ -313,7 +317,18 @@ export default function App() {
     });
 
     const unsubConn = apiService.subscribeConnectionState(setConnStatus);
+    const unsubModel = modelPreferenceService.subscribe((snap) => {
+      if (snap.selectedModel) {
+        setActiveModel(snap.selectedModel);
+      }
+    });
+    const unsubLive = liveApiService.subscribe(setLiveState);
     const unsubRouter = intelligenceRouter.subscribe(setRouterStatus);
+
+    if (apiService.isBackendConfigured()) {
+      apiService.checkBackendConnection().catch(() => {});
+      modelPreferenceService.refreshFromServer().catch(() => {});
+    }
 
     wakeWordService.setOnWakeWord(() => {
       soundFx.playAuthorize();
@@ -355,6 +370,8 @@ export default function App() {
       unsubVoice();
       unsubTheme();
       unsubConn();
+      unsubModel();
+      unsubLive();
       unsubRouter();
       unsubDeepAction();
       window.removeEventListener('suryaExternalFallback', handleExternalFallback);
@@ -431,22 +448,28 @@ export default function App() {
       ? `On-device · ${routerStatus.activeLocalModelName}`
       : routerStatus.mode === 'offline'
       ? 'Offline mode'
-      : connStatus.state === 'CONNECTED'
-      ? 'Connected'
-      : connStatus.state === 'CONNECTING'
-      ? 'Connecting'
-      : 'Offline';
+      : !routerStatus.networkOnline
+      ? 'Network offline'
+      : liveState.connected
+      ? 'Gemini Live Active'
+      : connStatus.state === 'CONNECTED' && connStatus.geminiConfigured !== false
+      ? 'Gemini Connected'
+      : connStatus.state === 'CONNECTED' && connStatus.geminiConfigured === false
+      ? 'Server Online (Key Pending)'
+      : 'Gemini Ready';
 
   const headerStatusDot =
     routerStatus.activePath === 'on-device-llm'
       ? 'bg-[#60a5fa]'
       : routerStatus.mode === 'offline'
       ? 'bg-[#d4a84f]'
-      : connStatus.state === 'CONNECTED'
+      : !routerStatus.networkOnline
+      ? 'bg-slate-500'
+      : liveState.connected || (connStatus.state === 'CONNECTED' && connStatus.geminiConfigured !== false)
       ? 'bg-emerald-400'
-      : connStatus.state === 'CONNECTING'
+      : connStatus.state === 'CONNECTED'
       ? 'bg-amber-400'
-      : 'bg-slate-500';
+      : 'bg-teal-400';
 
   return (
     <div
@@ -560,11 +583,13 @@ export default function App() {
         {currentTab === 'core' && (
           <div className="flex flex-col items-center">
             <HolographicCore
-              isListening={voiceState.isListening}
-              isSpeaking={voiceState.isSpeaking}
+              isListening={voiceState.isListening || liveState.connected}
+              isSpeaking={voiceState.isSpeaking || liveState.isSpeaking}
               statusText={
-                voiceState.isSpeaking
+                liveState.isSpeaking || voiceState.isSpeaking
                   ? 'Speaking'
+                  : liveState.connected
+                  ? 'Live Audio'
                   : voiceState.isListening
                   ? 'Listening'
                   : routerStatus.activePath === 'on-device-llm'
@@ -575,7 +600,9 @@ export default function App() {
               }
               audioLevel={voiceState.audioLevel}
               onCoreTap={() => {
-                if (voiceState.isListening) {
+                if (liveState.connected) {
+                  liveApiService.disconnect();
+                } else if (voiceState.isListening) {
                   voiceService.stopListening();
                 } else if (voiceState.isSpeaking) {
                   voiceService.interruptAndListen(handleTranscript);
@@ -598,6 +625,11 @@ export default function App() {
                   setSystemOpenSection(null);
                 }
                 setCurrentTab(tab);
+              }}
+              onOpenGeminiSettings={() => {
+                setSystemSubTab('health');
+                setSystemOpenSection('gemini');
+                setCurrentTab('system');
               }}
               onOpenBackendSettings={() => {
                 setSystemSubTab('health');
@@ -628,9 +660,14 @@ export default function App() {
             responseMode={responseMode}
             onChangeResponseMode={handleChangeResponseMode}
             onOpenModelModal={() => setShowModelModal(true)}
+            onOpenGeminiSettings={() => {
+              setSystemSubTab('health');
+              setSystemOpenSection('gemini');
+              setCurrentTab('system');
+            }}
             onOpenTelemetry={() => {
               setSystemSubTab('health');
-              setSystemOpenSection('backend');
+              setSystemOpenSection('gemini');
               setCurrentTab('system');
             }}
             onOpenOfflineSettings={() => {
@@ -754,6 +791,10 @@ export default function App() {
             {systemSubTab === 'health' && (
               <SystemHealthDashboard
                 initialOpenSection={systemOpenSection}
+                onSelectModel={(id) => {
+                  const updated = modelPreferenceService.setSelectedModel(id);
+                  setActiveModel(updated);
+                }}
                 onOpenVoiceModal={() => setShowVoiceModal(true)}
                 onOpenThemeModal={() => setShowThemeModal(true)}
                 onOpenMemory={() => setSystemSubTab('world')}
@@ -781,7 +822,15 @@ export default function App() {
         <ModelSelectorModal
           onClose={() => setShowModelModal(false)}
           activeModel={activeModel}
-          onSelectModel={(id) => setActiveModel(id)}
+          onSelectModel={(id) => {
+            const updated = modelPreferenceService.setSelectedModel(id);
+            setActiveModel(updated);
+          }}
+          onOpenGeminiSettings={() => {
+            setSystemSubTab('health');
+            setSystemOpenSection('gemini');
+            setCurrentTab('system');
+          }}
           onOpenOfflineStore={() => {
             setSystemSubTab('health');
             setSystemOpenSection('offline');
