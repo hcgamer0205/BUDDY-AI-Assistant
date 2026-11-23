@@ -388,39 +388,7 @@ public class MainActivity extends BridgeActivity {
                     obj.put("latency", v.getLatency());
                     obj.put("isNetwork", v.isNetworkConnectionRequired());
 
-                    // Accurately determine gender without female/male substring collisions
-                    String lowerName = v.getName().toLowerCase(Locale.ROOT);
-                    Set<String> features = v.getFeatures();
-                    String gender = "unverified";
-                    if (features != null) {
-                        for (String f : features) {
-                            String lf = f.toLowerCase(Locale.ROOT);
-                            if (lf.contains("gender=male") || lf.equals("male")) {
-                                gender = "male";
-                                break;
-                            } else if (lf.contains("gender=female") || lf.equals("female")) {
-                                gender = "female";
-                                break;
-                            }
-                        }
-                    }
-                    if ("unverified".equals(gender)) {
-                        // Check female FIRST to avoid "female".contains("male") false positive
-                        if (lowerName.contains("female") || lowerName.contains("#female") || lowerName.contains("-female")
-                                || lowerName.contains("_female") || lowerName.contains("_f_") || lowerName.contains("female_")) {
-                            gender = "female";
-                        } else if (lowerName.contains("#male") || lowerName.contains("-male") || lowerName.contains("_male")
-                                || lowerName.contains("male_") || lowerName.contains("male1") || lowerName.contains("male2") || lowerName.contains("male3")
-                                || lowerName.matches(".*(?:^|[^a-z])male(?:[^a-z]|$).*")
-                                || lowerName.contains("sfg#male") || lowerName.contains("rjs#male") || lowerName.contains("iob#male")
-                                || lowerName.contains("cxx#male") || lowerName.contains("cfc#male") || lowerName.contains("hie#male") || lowerName.contains("hid#male")
-                                || lowerName.contains("m01") || lowerName.contains("m02") || lowerName.contains("m03")
-                                || lowerName.contains("david") || lowerName.contains("george") || lowerName.contains("mark") || lowerName.contains("daniel")
-                                || lowerName.contains("ravi") || lowerName.contains("pradeep") || lowerName.contains("mohan") || lowerName.contains("amit")) {
-                            gender = "male";
-                        }
-                    }
-                    obj.put("gender", gender);
+                    obj.put("gender", detectAndroidVoiceGender(v));
                     arr.put(obj);
                 }
                 return arr.toString();
@@ -454,7 +422,7 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public boolean setVoiceById(String voiceId) {
-            if (tts == null || voiceId == null || voiceId.trim().isEmpty()) return false;
+            if (tts == null || !ttsInitialized || voiceId == null || voiceId.trim().isEmpty()) return false;
             try {
                 Set<Voice> voices = tts.getVoices();
                 if (voices != null) {
@@ -473,7 +441,7 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public boolean setPitchAndRate(float pitch, float rate) {
-            if (tts == null) return false;
+            if (tts == null || !ttsInitialized) return false;
             try {
                 tts.setPitch(Math.max(0.5f, Math.min(2.0f, pitch)));
                 tts.setSpeechRate(Math.max(0.5f, Math.min(2.0f, rate)));
@@ -485,22 +453,17 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public boolean hasMaleVoice(String langCode) {
-            if (tts == null) return false;
+            if (tts == null || !ttsInitialized) return false;
             try {
                 Set<Voice> voices = tts.getVoices();
                 if (voices == null) return false;
-                String targetPrefix = (langCode != null && !langCode.isEmpty()) ? langCode.substring(0, 2).toLowerCase(Locale.ROOT) : "";
+                String targetPrefix = (langCode != null && langCode.length() >= 2) ? langCode.substring(0, 2).toLowerCase(Locale.ROOT) : "";
                 for (Voice v : voices) {
                     Locale loc = v.getLocale();
                     if (loc != null && !targetPrefix.isEmpty() && !loc.getLanguage().toLowerCase(Locale.ROOT).startsWith(targetPrefix)) {
                         continue;
                     }
-                    String lowerName = v.getName().toLowerCase(Locale.ROOT);
-                    if (lowerName.contains("female")) continue;
-                    if (lowerName.contains("male") || lowerName.contains("#male") || lowerName.contains("-male") || lowerName.contains("_male")
-                            || lowerName.contains("sfg#male") || lowerName.contains("rjs#male") || lowerName.contains("iob#male")
-                            || lowerName.contains("cxx#male") || lowerName.contains("cfc#male") || lowerName.contains("hie#male") || lowerName.contains("hid#male")
-                            || lowerName.contains("m01") || lowerName.contains("david") || lowerName.contains("george")) {
+                    if ("male".equals(detectAndroidVoiceGender(v))) {
                         return true;
                     }
                 }
@@ -513,7 +476,11 @@ public class MainActivity extends BridgeActivity {
         @JavascriptInterface
         public void speakTextWithConfig(String text, String voiceId, float pitch, float rate, String langCode) {
             mainHandler.post(() -> {
-                if (tts == null || text == null || text.trim().isEmpty()) return;
+                String utteranceId = "surya_tts_" + System.currentTimeMillis();
+                if (tts == null || !ttsInitialized || text == null || text.trim().isEmpty()) {
+                    sendJsEvent("onNativeTtsDone", "{\"utteranceId\":" + JSONObject.quote(utteranceId) + ",\"error\":true,\"reason\":\"tts_not_ready\"}");
+                    return;
+                }
                 try {
                     if (langCode != null && !langCode.trim().isEmpty()) {
                         tts.setLanguage(Locale.forLanguageTag(langCode.trim()));
@@ -527,19 +494,55 @@ public class MainActivity extends BridgeActivity {
                     if (voiceId != null && !voiceId.trim().isEmpty()) {
                         Set<Voice> voices = tts.getVoices();
                         if (voices != null) {
+                            String trimmedId = voiceId.trim();
                             for (Voice v : voices) {
-                                if (v.getName().equalsIgnoreCase(voiceId.trim())) {
+                                if (v.getName().equalsIgnoreCase(trimmedId)) {
                                     tts.setVoice(v);
                                     break;
                                 }
                             }
                         }
                     }
-                    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "surya_tts_" + System.currentTimeMillis());
+                    int speakStatus = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId);
+                    if (speakStatus == TextToSpeech.ERROR) {
+                        sendJsEvent("onNativeTtsDone", "{\"utteranceId\":" + JSONObject.quote(utteranceId) + ",\"error\":true,\"reason\":\"tts_speak_error\"}");
+                    }
                 } catch (Exception e) {
-                    tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "surya_tts_" + System.currentTimeMillis());
+                    sendJsEvent("onNativeTtsDone", "{\"utteranceId\":" + JSONObject.quote(utteranceId) + ",\"error\":true,\"reason\":" + JSONObject.quote(e.getMessage() != null ? e.getMessage() : "tts_exception") + "}");
                 }
             });
+        }
+
+        private String detectAndroidVoiceGender(Voice v) {
+            Set<String> features = v.getFeatures();
+            if (features != null) {
+                for (String f : features) {
+                    String lf = f.toLowerCase(Locale.ROOT);
+                    if (lf.contains("gender=male") || lf.equals("male")) {
+                        return "male";
+                    } else if (lf.contains("gender=female") || lf.equals("female")) {
+                        return "female";
+                    }
+                }
+            }
+            String lowerName = v.getName().toLowerCase(Locale.ROOT);
+            // Check female FIRST so substring "male" inside "female" never misclassifies a female voice as male
+            if (lowerName.contains("female") || lowerName.contains("#female") || lowerName.contains("-female")
+                    || lowerName.contains("_female") || lowerName.contains("_f_") || lowerName.contains("female_")
+                    || lowerName.matches(".*(?:^|[^a-z])f0[1-9](?:[^a-z0-9]|$).*")) {
+                return "female";
+            }
+            if (lowerName.contains("#male") || lowerName.contains("-male") || lowerName.contains("_male")
+                    || lowerName.contains("male_") || lowerName.contains("male1") || lowerName.contains("male2") || lowerName.contains("male3")
+                    || lowerName.matches(".*(?:^|[^a-z])male(?:[^a-z]|$).*")
+                    || lowerName.contains("sfg#male") || lowerName.contains("rjs#male") || lowerName.contains("iob#male")
+                    || lowerName.contains("cxx#male") || lowerName.contains("cfc#male") || lowerName.contains("hie#male") || lowerName.contains("hid#male")
+                    || lowerName.contains("m01") || lowerName.contains("m02") || lowerName.contains("m03")
+                    || lowerName.contains("david") || lowerName.contains("george") || lowerName.contains("mark") || lowerName.contains("daniel")
+                    || lowerName.contains("ravi") || lowerName.contains("pradeep") || lowerName.contains("mohan") || lowerName.contains("amit")) {
+                return "male";
+            }
+            return "unverified";
         }
 
         @JavascriptInterface

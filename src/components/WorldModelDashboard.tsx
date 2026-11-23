@@ -9,6 +9,9 @@ import {
   PauseCircle,
   PlayCircle,
   AlertTriangle,
+  Pencil,
+  Check,
+  X,
 } from 'lucide-react';
 import { WorldModelMemory } from '../types/surya';
 import { apiService } from '../services/apiService';
@@ -25,6 +28,10 @@ export const WorldModelDashboard: React.FC = () => {
   const [memoryEnabled, setMemoryEnabled] = useState<boolean>(personalMemoryService.isEnabled());
   const [confirmPurgeArmed, setConfirmPurgeArmed] = useState(false);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editKey, setEditKey] = useState('');
+  const [editValue, setEditValue] = useState('');
+  const [editCategory, setEditCategory] = useState<WorldModelMemory['category']>('preference');
 
   useEffect(() => {
     loadMemories();
@@ -34,12 +41,9 @@ export const WorldModelDashboard: React.FC = () => {
     setIsLoading(true);
     try {
       const data = await apiService.getMemories();
-      const localMems = personalMemoryService.getAllMemories();
-      // Merge server memories and local memories cleanly without duplicates
-      const map = new Map<string, WorldModelMemory>();
-      for (const m of localMems) map.set(m.id, m);
-      for (const m of data.memories || []) map.set(m.id, m);
-      setMemories(Array.from(map.values()));
+      const serverMems = Array.isArray(data.memories) ? data.memories : [];
+      personalMemoryService.replaceAll(serverMems);
+      setMemories(serverMems);
     } catch {
       setMemories(personalMemoryService.getAllMemories());
     } finally {
@@ -87,10 +91,40 @@ export const WorldModelDashboard: React.FC = () => {
   const handleDelete = async (id: string) => {
     soundFx.playClick();
     personalMemoryService.deleteMemory(id);
+    setMemories((prev) => prev.filter((m) => m.id !== id));
     try {
       await apiService.deleteMemory(id);
     } catch {}
-    loadMemories();
+  };
+
+  const handleStartEdit = (m: WorldModelMemory) => {
+    soundFx.playClick();
+    setEditingId(m.id);
+    setEditKey(m.key);
+    setEditValue(m.value);
+    setEditCategory(m.category);
+  };
+
+  const handleSaveEdit = async (id: string) => {
+    if (!editKey.trim() || !editValue.trim()) return;
+    soundFx.playAuthorize();
+    const updates = {
+      key: editKey.trim(),
+      value: editValue.trim(),
+      category: editCategory,
+      source: 'user' as const,
+    };
+    personalMemoryService.updateMemory(id, updates);
+    setMemories((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, ...updates, updatedAt: new Date().toISOString() } : m))
+    );
+    setEditingId(null);
+    try {
+      await apiService.updateMemory(id, updates);
+      setStatusNotice('Memory record updated and synchronized.');
+    } catch {
+      setStatusNotice('Memory updated locally (offline mode).');
+    }
   };
 
   const handleConfirmPurge = async () => {
@@ -277,30 +311,99 @@ export const WorldModelDashboard: React.FC = () => {
             key={m.id}
             className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 hover:border-slate-700 transition-all flex items-start justify-between gap-3"
           >
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700">
-                  {m.category}
-                </span>
-                <span className="text-xs font-mono font-semibold text-slate-200 truncate">
-                  {m.key}
-                </span>
+            {editingId === m.id ? (
+              <div className="flex-1 space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <select
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value as any)}
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-400"
+                  >
+                    <option value="preference">User Preference</option>
+                    <option value="context">System Context</option>
+                    <option value="fact">Personal Fact</option>
+                    <option value="directive">AI Directive</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={editKey}
+                    onChange={(e) => setEditKey(e.target.value)}
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-400"
+                    placeholder="Key"
+                  />
+                </div>
+                <input
+                  type="text"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-400"
+                  placeholder="Value"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleSaveEdit(m.id)}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-500 text-slate-950 text-[10px] font-mono font-bold flex items-center gap-1"
+                  >
+                    <Check className="w-3 h-3" />
+                    <span>SAVE</span>
+                  </button>
+                  <button
+                    onClick={() => setEditingId(null)}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 text-[10px] font-mono flex items-center gap-1"
+                  >
+                    <X className="w-3 h-3" />
+                    <span>CANCEL</span>
+                  </button>
+                </div>
               </div>
-              <p className="text-xs text-slate-300 leading-snug">{m.value}</p>
-              <div className="flex items-center gap-2 mt-1.5 text-[10px] font-mono text-slate-500 tabular-nums">
-                <span>Confidence: {Math.round(m.confidence * 100)}%</span>
-                <span>·</span>
-                <span>Updated: {new Date(m.updatedAt).toLocaleDateString()}</span>
-              </div>
-            </div>
+            ) : (
+              <>
+                <div className="flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                    <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700">
+                      {m.category}
+                    </span>
+                    <span
+                      className={`text-[9px] font-mono uppercase px-1.5 py-0.5 rounded border ${
+                        m.source === 'inferred'
+                          ? 'bg-amber-950/60 text-amber-300 border-amber-500/30'
+                          : m.source === 'system'
+                          ? 'bg-slate-900 text-slate-400 border-slate-700'
+                          : 'bg-emerald-950/60 text-emerald-300 border-emerald-500/30'
+                      }`}
+                    >
+                      {m.source === 'inferred' ? 'Inferred' : m.source === 'system' ? 'System' : 'User Saved'}
+                    </span>
+                    <span className="text-xs font-mono font-semibold text-slate-200 truncate">
+                      {m.key}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-snug">{m.value}</p>
+                  <div className="flex items-center gap-2 mt-1.5 text-[10px] font-mono text-slate-500 tabular-nums">
+                    <span>Confidence: {Math.round(m.confidence * 100)}%</span>
+                    <span>·</span>
+                    <span>Updated: {new Date(m.updatedAt).toLocaleDateString()}</span>
+                  </div>
+                </div>
 
-            <button
-              onClick={() => handleDelete(m.id)}
-              className="p-2 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
-              title="Delete memory"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => handleStartEdit(m)}
+                    className="p-2 rounded-lg text-slate-500 hover:text-emerald-300 hover:bg-emerald-950/40 transition-colors"
+                    title="Edit memory"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(m.id)}
+                    className="p-2 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 transition-colors"
+                    title="Delete memory"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         ))}
 

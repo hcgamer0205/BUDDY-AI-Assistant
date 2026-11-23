@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Download,
   Sparkles,
@@ -35,11 +35,25 @@ export const AppCreatorWorkspace: React.FC = () => {
   const [githubData, setGithubData] = useState<GithubRepoSummary | null>(null);
   const [isLoadingGithub, setIsLoadingGithub] = useState(false);
 
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const sandboxNonceRef = useRef<string>(
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `sb_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+  );
+
   useEffect(() => {
     loadStudioApps();
     const handleSandboxMessage = (ev: MessageEvent) => {
-      if (ev.data && ev.data.type === 'SURYA_SANDBOX_ERROR') {
-        setSandboxErrors((prev) => [`${ev.data.message}`, ...prev].slice(0, 6));
+      if (!iframeRef.current?.contentWindow || ev.source !== iframeRef.current.contentWindow) {
+        return;
+      }
+      if (
+        ev.data &&
+        ev.data.type === 'SURYA_SANDBOX_ERROR' &&
+        ev.data.nonce === sandboxNonceRef.current
+      ) {
+        setSandboxErrors((prev) => [`${String(ev.data.message || 'Runtime error')}`, ...prev].slice(0, 6));
       }
     };
     window.addEventListener('message', handleSandboxMessage);
@@ -98,6 +112,7 @@ export const AppCreatorWorkspace: React.FC = () => {
       note,
       timestamp: new Date().toISOString(),
       previewHtml: app.previewHtml || app.files[0]?.content || '',
+      files: app.files.map((f) => ({ ...f })),
     };
     setVersionHistory((prev) => [snap, ...prev].slice(0, 10));
   };
@@ -291,14 +306,17 @@ export const AppCreatorWorkspace: React.FC = () => {
   const handleRollback = (snap: StudioVersionSnapshot) => {
     if (!currentApp) return;
     soundFx.playClick();
-    const updatedFiles = currentApp.files.map((f, idx) =>
-      idx === 0 ? { ...f, content: snap.previewHtml } : f
-    );
+    const updatedFiles =
+      Array.isArray(snap.files) && snap.files.length > 0
+        ? snap.files.map((f) => ({ ...f }))
+        : currentApp.files.map((f, idx) => (idx === 0 ? { ...f, content: snap.previewHtml } : f));
     setCurrentApp({
       ...currentApp,
       files: updatedFiles,
       previewHtml: snap.previewHtml,
+      lastModified: new Date().toISOString(),
     });
+    setSelectedFileIdx(0);
     setStatusMessage(`Restored snapshot from ${new Date(snap.timestamp).toLocaleTimeString()}`);
   };
 
@@ -314,6 +332,26 @@ export const AppCreatorWorkspace: React.FC = () => {
     a.click();
     URL.revokeObjectURL(url);
     setStatusMessage('Exported standalone HTML file.');
+  };
+
+  const handleExportBundle = () => {
+    if (!currentApp) return;
+    soundFx.playAuthorize();
+    const bundlePayload = {
+      name: currentApp.name,
+      description: currentApp.description,
+      version: currentApp.version,
+      exportedAt: new Date().toISOString(),
+      files: currentApp.files,
+    };
+    const blob = new Blob([JSON.stringify(bundlePayload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentApp.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-bundle.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatusMessage('Exported multi-file project bundle JSON.');
   };
 
   const handleInspectGithub = async () => {
@@ -338,10 +376,11 @@ export const AppCreatorWorkspace: React.FC = () => {
   };
 
   const rawHtml = currentApp?.files[0]?.content || currentApp?.previewHtml || '';
-  const errorBridgeScript = `<script>window.onerror=function(m,s,l){parent.postMessage({type:'SURYA_SANDBOX_ERROR',message:m+' (line '+l+')'},'*');};</script>`;
+  const cspMetaTag = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://cdn.tailwindcss.com; connect-src 'none'; form-action 'none';">`;
+  const errorBridgeScript = `<script>window.onerror=function(m,s,l){parent.postMessage({type:'SURYA_SANDBOX_ERROR',nonce:${JSON.stringify(sandboxNonceRef.current)},message:String(m)+' (line '+l+')'},'*');};</script>`;
   const instrumentedHtml = rawHtml.includes('<head>')
-    ? rawHtml.replace('<head>', `<head>${errorBridgeScript}`)
-    : `${errorBridgeScript}${rawHtml}`;
+    ? rawHtml.replace('<head>', `<head>${cspMetaTag}${errorBridgeScript}`)
+    : `${cspMetaTag}${errorBridgeScript}${rawHtml}`;
 
   return (
     <div className="flex flex-col w-full max-w-4xl mx-auto px-4 py-4 space-y-4 pb-24">
@@ -460,6 +499,14 @@ export const AppCreatorWorkspace: React.FC = () => {
                 <Download className="w-3.5 h-3.5" />
                 <span>Export HTML</span>
               </button>
+              <button
+                type="button"
+                onClick={handleExportBundle}
+                className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#070d14] border border-cyan-500/30 hover:border-cyan-400 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Bundle JSON</span>
+              </button>
             </div>
           </div>
 
@@ -484,6 +531,7 @@ export const AppCreatorWorkspace: React.FC = () => {
 
           <div className="rounded-2xl border border-emerald-500/25 overflow-hidden bg-[#070a12] h-84 shadow-2xl">
             <iframe
+              ref={iframeRef}
               srcDoc={instrumentedHtml}
               sandbox="allow-scripts"
               title="BUDDY Studio Preview"

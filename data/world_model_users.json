@@ -100,5 +100,128 @@
       "confidence": 0.95,
       "updatedAt": "2026-11-16T13:41:47.710Z"
     }
+  ],
+  "c980d6a1f258f05a6d6b511b": [
+    {
+      "id": "mem_1",
+      "category": "preference",
+      "key": "preferred_language",
+      "value": "Auto-detect (Indian & International languages supported)",
+      "confidence": 1,
+      "source": "system",
+      "updatedAt": "2026-11-23T14:56:46.301Z"
+    },
+    {
+      "id": "mem_2",
+      "category": "preference",
+      "key": "response_mode",
+      "value": "Fast Mode with real-time SSE streaming",
+      "confidence": 0.98,
+      "source": "system",
+      "updatedAt": "2026-11-23T14:56:46.302Z"
+    },
+    {
+      "id": "mem_3",
+      "category": "directive",
+      "key": "surya_security_protocol",
+      "value": "Enforce cryptographic challenge and 3-second abort countdown on medium/high-risk device actions",
+      "confidence": 1,
+      "source": "system",
+      "updatedAt": "2026-11-23T14:56:46.302Z"
+    },
+    {
+      "id": "mem_4",
+      "category": "context",
+      "key": "target_platform",
+      "value": "BUDDY Android Mobile Assistant (SDK 36, Capacitor 8, Java 21)",
+      "confidence": 0.95,
+      "source": "system",
+      "updatedAt": "2026-11-23T14:56:46.302Z"
+    },
+    {
+      "id": "mem_1795445806447",
+      "category": "preference",
+      "key": "Theme",
+      "value": "Tampered",
+      "confidence": 1,
+      "source": "user",
+      "updatedAt": "2026-11-23T14:58:54.924Z"
+    }
+  ],
+  "e8b644240f01c109d24bec50": [
+    {
+      "id": "mem_1",
+      "category": "preference",
+      "key": "preferred_language",
+      "value": "Auto-detect (Indian & International languages supported)",
+      "confidence": 1,
+      "source": "system",
+      "updatedAt": "2026-11-23T15:00:18.242Z"
+    },
+    {
+      "id": "mem_2",
+      "category": "preference",
+      "key": "response_mode",
+      "value": "Fast Mode with real-time SSE streaming",
+      "confidence": 0.98,
+      "source": "system",
+      "updatedAt": "2026-11-23T15:00:18.243Z"
+    },
+    {
+      "id": "mem_3",
+      "category": "directive",
+      "key": "surya_security_protocol",
+      "value": "Enforce cryptographic challenge and 3-second abort countdown on medium/high-risk device actions",
+      "confidence": 1,
+      "source": "system",
+      "updatedAt": "2026-11-23T15:00:18.243Z"
+    },
+    {
+      "id": "mem_4",
+      "category": "context",
+      "key": "target_platform",
+      "value": "BUDDY Android Mobile Assistant (SDK 36, Capacitor 8, Java 21)",
+      "confidence": 0.95,
+      "source": "system",
+      "updatedAt": "2026-11-23T15:00:18.243Z"
+    }
+  ],
+  "795745aec44633f0351433ec": [
+    {
+      "id": "mem_1",
+      "category": "preference",
+      "key": "preferred_language",
+      "value": "Auto-detect (Indian & International languages supported)",
+      "confidence": 1,
+      "source": "system",
+      "updatedAt": "2026-11-23T15:00:18.242Z"
+    },
+    {
+      "id": "mem_2",
+      "category": "preference",
+      "key": "response_mode",
+      "value": "Fast Mode with real-time SSE streaming",
+      "confidence": 0.98,
+      "source": "system",
+      "updatedAt": "2026-11-23T15:00:18.243Z"
+    },
+    {
+      "id": "mem_3",
+      "category": "directive",
+      "key": "surya_security_protocol",
+      "value": "Enforce cryptographic challenge and 3-second abort countdown on medium/high-risk device actions",
+      "confidence": 1,
+      "source": "system",
+      "updatedAt": "2026-11-23T15:00:18.243Z"
+    },
+    {
+      "id": "mem_4",
+      "category": "context",
+      "key": "target_platform",
+      "value": "BUDDY Android Mobile Assistant (SDK 36, Capacitor 8, Java 21)",
+      "confidence": 0.95,
+      "source": "system",
+      "updatedAt": "2026-11-23T15:00:18.243Z"
+    }
   ]
 }

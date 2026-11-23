@@ -20,7 +20,10 @@ import { intelligenceRouter } from '../services/intelligenceRouter';
 import { soundFx } from '../services/soundFx';
 
 interface StarkAppLinkHubProps {
-  onRequestVeronicaAuth: (app: StarkApp, onAuthorized: () => void) => void;
+  onRequestVeronicaAuth: (
+    app: StarkApp,
+    onAuthorized: (challengeId: string, authToken: string) => void
+  ) => void;
 }
 
 const OFFLINE_LOCAL_APPS: StarkApp[] = [
@@ -164,17 +167,21 @@ export const StarkAppLinkHub: React.FC<StarkAppLinkHubProps> = ({ onRequestVeron
   const handleLaunch = (app: StarkApp) => {
     soundFx.playClick();
 
-    if (app.riskLevel === 'HIGH') {
-      onRequestVeronicaAuth(app, async () => {
-        dispatchIntent(app, true);
+    if (app.riskLevel === 'HIGH' || app.riskLevel === 'MEDIUM') {
+      onRequestVeronicaAuth(app, async (challengeId, authToken) => {
+        dispatchIntent(app, challengeId, authToken);
       });
       return;
     }
 
-    dispatchIntent(app, false);
+    dispatchIntent(app);
   };
 
-  const dispatchIntent = async (app: StarkApp, authorized: boolean) => {
+  const dispatchIntent = async (
+    app: StarkApp,
+    challengeId?: string,
+    authToken?: string
+  ) => {
     const dispatchedLocally = deviceBridgeService.launchApp(app.package, app.action);
     if (dispatchedLocally) {
       soundFx.playAuthorize();
@@ -203,8 +210,8 @@ export const StarkAppLinkHub: React.FC<StarkAppLinkHubProps> = ({ onRequestVeron
       await apiService.launchStarkApp(
         app.id,
         undefined,
-        authorized ? 'challenge_auth' : undefined,
-        authorized ? 'token_auth' : undefined
+        challengeId,
+        authToken
       );
       soundFx.playAuthorize();
       setLaunchStatus({

@@ -1768,6 +1768,353 @@ test('33. Server-Side Gemini Interactions API & Live API Migration Verification'
   }
 });
 
+// 34. Voice Profile Reset on Gender/Language Change & Android TTS Safety Audit
+test('34. VoiceProfileManager Reset & Android MainActivity.java TTS Voice/Error Guards', () => {
+  const tsxBin = path.resolve('node_modules/.bin/tsx');
+  const script = `
+    import { voiceProfileManager } from './src/services/voiceProfileManager.ts';
+    voiceProfileManager.setProfile('calm-intelligence');
+    voiceProfileManager.setSelectedVoiceURI('com.example.female.en-US');
+    const before = voiceProfileManager.getSettings();
+    if (before.selectedVoiceURI !== 'com.example.female.en-US') throw new Error('Expected URI stored');
+    voiceProfileManager.setProfile('jarvis-male');
+    const afterGender = voiceProfileManager.getSettings();
+    if (afterGender.selectedVoiceURI !== undefined) throw new Error('Switching gender must clear selectedVoiceURI');
+    voiceProfileManager.setSelectedVoiceURI('com.example.male.en-IN');
+    voiceProfileManager.setProfile('hindi-command');
+    const afterLang = voiceProfileManager.getSettings();
+    if (afterLang.selectedVoiceURI !== undefined) throw new Error('Switching language must clear selectedVoiceURI');
+    console.log('VOICE_RESET_OK');
+  `;
+  const out = execFileSync(tsxBin, ['--input-type=module', '-e', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  assert.ok(out.includes('VOICE_RESET_OK'));
+
+  const mainActSrc = fs.readFileSync(
+    path.resolve('android/app/src/main/java/com/surya/assistant/MainActivity.java'),
+    'utf8'
+  );
+  assert.ok(mainActSrc.includes('detectAndroidVoiceGender('), 'MainActivity must unify gender detection');
+  assert.ok(mainActSrc.includes('(?:^|[^a-z])male(?:[^a-z]|$)'), 'Must use word-boundary male check after female-first guard');
+  assert.ok(mainActSrc.includes('!ttsInitialized'), 'Must guard TTS calls until initialized');
+  assert.ok(mainActSrc.includes('"error", true') || mainActSrc.includes('error\\":true'), 'Must emit TTS error notification instead of hanging');
+});
+
+// 35. Local Cancellation Propagation & IntelligenceRouter Abort Isolation
+test('35. Local Inference Cancellation & IntelligenceRouter Abort Does Not Trigger Offline Fallback', async () => {
+  let activeReqId = null;
+  const runtime = new LocalInferenceRuntime({
+    getDownloadState: () => ({ status: 'ready', verifiedSha256: true }),
+    nativeBridgeProvider: () => ({
+      loadLocalModel: () => ({ loaded: true, backend: 'MediaPipe LlmInference (Android)' }),
+      generateLocalLlmResponse: (requestId) => {
+        activeReqId = requestId;
+        return true;
+      },
+      cancelLocalLlmGeneration: () => {
+        if (activeReqId) {
+          runtime.handleNativeTokenEvent({ requestId: activeReqId, done: true, cancelled: true });
+        }
+        return true;
+      },
+    }),
+  });
+
+  await runtime.loadModel(OFFLINE_MODEL_CATALOG[0].id);
+  const pending = runtime.generateResponse('Tell a long story');
+  await new Promise((r) => setTimeout(r, 15));
+  runtime.cancelGeneration();
+  await assert.rejects(
+    () => pending,
+    (err) => err instanceof LocalRuntimeError && err.code === 'GENERATION_CANCELLED'
+  );
+
+  // Router must NOT fall back to local runtime when caller aborts cloud stream
+  let localCalled = 0;
+  const ac = new AbortController();
+  const router = new IntelligenceRouter({
+    initialMode: 'auto',
+    isOnlineCheck: () => true,
+    localRuntime: {
+      getState: () => ({ status: 'ready', activeModelId: OFFLINE_MODEL_CATALOG[0].id, activeModelName: OFFLINE_MODEL_CATALOG[0].displayName }),
+      async generateResponse() {
+        localCalled += 1;
+        return { text: 'unexpected', modelName: 'Local', tokensPerSec: 10 };
+      },
+    },
+    cloudHandler: async () => {
+      const abortErr = new Error('The operation was aborted');
+      abortErr.name = 'AbortError';
+      ac.abort();
+      throw abortErr;
+    },
+  });
+
+  await assert.rejects(() => router.routeMessage('Hi there', { signal: ac.signal }));
+  assert.strictEqual(localCalled, 0, 'Aborted cloud request must not invoke offline fallback');
+
+  const orchSrc = fs.readFileSync(path.resolve('src/services/buddyOrchestrator.ts'), 'utf8');
+  assert.ok(orchSrc.includes('resetConversation()'), 'buddyOrchestrator must expose resetConversation()');
+  assert.ok(orchSrc.includes('cancelActiveGeneration()'), 'buddyOrchestrator must expose cancelActiveGeneration()');
+});
+
+// 36. Vision Payload Magic-Byte Validation & Android Bitmap Downsampling Guard
+test('36. Server extractImagePayload & Android BitmapFactory inSampleSize Guards', () => {
+  const tsxBin = path.resolve('node_modules/.bin/tsx');
+  const validPng = 'data:image/png;base64,' + Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64');
+  const script = `
+    import { extractImagePayload } from './server.ts';
+    const png = extractImagePayload(${JSON.stringify(validPng)});
+    if (!png || png.mimeType !== 'image/png') throw new Error('Expected valid PNG payload');
+    const badText = extractImagePayload('data:text/html;base64,PGgxPkZha2U8L2gxPg==');
+    if (badText !== null) throw new Error('Non-image MIME type must be rejected');
+    const fakePngHeader = extractImagePayload('data:image/png;base64,' + Buffer.from('not-actually-png').toString('base64'));
+    if (fakePngHeader !== null) throw new Error('Spoofed PNG magic bytes must be rejected');
+    console.log('IMAGE_EXTRACT_OK');
+  `;
+  const out = execFileSync(tsxBin, ['--input-type=module', '-e', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      SURYA_SKIP_LISTEN: '1',
+      SURYA_SKIP_VITE: '1',
+    },
+  });
+  assert.ok(out.includes('IMAGE_EXTRACT_OK'));
+
+  const offlineJava = fs.readFileSync(
+    path.resolve('android/app/src/main/java/com/surya/assistant/SuryaOfflineModelService.java'),
+    'utf8'
+  );
+  assert.ok(offlineJava.includes('inJustDecodeBounds'), 'Must inspect bitmap dimensions before full decode');
+  assert.ok(offlineJava.includes('inSampleSize'), 'Must downsample oversized camera frames to prevent OOM');
+});
+
+// 37. Server Readiness, Prompt Validation, Memory PUT & Namespace Isolation
+test('37. Backend Readiness Probe, Prompt Validation, Memory PUT & Namespace Isolation', async () => {
+  const srv = await startIsolatedBackend({ GEMINI_API_KEY: '', VERONICA_OPERATOR_PIN: '4321' });
+  try {
+    const readyRes = await fetch(`${srv.baseUrl}/api/ready`);
+    assert.strictEqual(readyRes.status, 200);
+    const readyJson = await readyRes.json();
+    assert.strictEqual(readyJson.ready, true);
+
+    const emptyChat = await fetch(`${srv.baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: '   \n  ' }),
+    });
+    assert.strictEqual(emptyChat.status, 400);
+
+    const emptyStream = await fetch(`${srv.baseUrl}/api/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: '   ' }),
+    });
+    assert.strictEqual(emptyStream.status, 400);
+
+    // Memory CRUD + namespace isolation
+    const addMem = await fetch(`${srv.baseUrl}/api/memory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Surya-Client-Id': 'user-alpha' },
+      body: JSON.stringify({ category: 'preference', key: 'Theme', value: 'Emerald Glass', source: 'user' }),
+    });
+    assert.strictEqual(addMem.status, 200);
+    const addBody = await addMem.json();
+    const record = addBody.created || addBody.updated;
+    assert.ok(record && record.id, 'Memory creation should return created/updated record');
+    assert.strictEqual(record.source, 'user');
+
+    const updateMem = await fetch(`${srv.baseUrl}/api/memory/${record.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Surya-Client-Id': 'user-alpha' },
+      body: JSON.stringify({ value: 'Emerald Midnight' }),
+    });
+    assert.strictEqual(updateMem.status, 200);
+    const updatedJson = await updateMem.json();
+    assert.strictEqual(updatedJson.memory.value, 'Emerald Midnight');
+
+    // Cross-namespace update must fail with 404
+    const crossEdit = await fetch(`${srv.baseUrl}/api/memory/${record.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Surya-Client-Id': 'user-beta' },
+      body: JSON.stringify({ value: 'Tampered' }),
+    });
+    assert.strictEqual(crossEdit.status, 404);
+
+    // Cleanup test memory
+    const delMem = await fetch(`${srv.baseUrl}/api/memory/${record.id}`, {
+      method: 'DELETE',
+      headers: { 'X-Surya-Client-Id': 'user-alpha' },
+    });
+    assert.strictEqual(delMem.status, 200);
+  } finally {
+    await srv.stop();
+  }
+});
+
+// 38. Veronica Server-Side PIN, Challenge Isolation & Live WebSocket Ticket/Origin Guard
+test('38. Veronica Server PIN Verification & WSS /api/live Ticket/Origin Hardening', async () => {
+  const modalSrc = fs.readFileSync(path.resolve('src/components/VeronicaSecurityModal.tsx'), 'utf8');
+  assert.doesNotMatch(modalSrc, /!==\s*['"]1024['"]/, 'VeronicaSecurityModal must never hardcode PIN 1024');
+  assert.doesNotMatch(modalSrc, /e\.g\.\s*1024/, 'VeronicaSecurityModal must never reveal a PIN hint');
+
+  // 1. Fail closed when VERONICA_OPERATOR_PIN is unset
+  const srvNoPin = await startIsolatedBackend({ VERONICA_OPERATOR_PIN: '' });
+  try {
+    const chRes = await fetch(`${srvNoPin.baseUrl}/api/veronica/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Surya-Client-Id': 'op-1' },
+      body: JSON.stringify({ actionId: 'app_settings' }),
+    });
+    assert.strictEqual(chRes.status, 200);
+    const ch = await chRes.json();
+    const denyRes = await fetch(`${srvNoPin.baseUrl}/api/veronica/authorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Surya-Client-Id': 'op-1' },
+      body: JSON.stringify({ challengeId: ch.challengeId, authMethod: 'DEVICE_SECURITY_PIN_VALIDATION', operatorPin: '1024' }),
+    });
+    assert.strictEqual(denyRes.status, 403);
+    const denyJson = await denyRes.json();
+    assert.strictEqual(denyJson.code, 'PIN_NOT_CONFIGURED');
+  } finally {
+    await srvNoPin.stop();
+  }
+
+  // 2. Verify PIN, namespace check, and WebSocket ticket + Origin checks
+  const srv = await startIsolatedBackend({ VERONICA_OPERATOR_PIN: '9876', VERONICA_SECRET: 'ci-veronica-secret' });
+  try {
+    const chRes = await fetch(`${srv.baseUrl}/api/veronica/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Surya-Client-Id': 'op-1' },
+      body: JSON.stringify({ actionId: 'app_settings' }),
+    });
+    assert.strictEqual(chRes.status, 200);
+    const ch = await chRes.json();
+
+    const wrongPin = await fetch(`${srv.baseUrl}/api/veronica/authorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Surya-Client-Id': 'op-1' },
+      body: JSON.stringify({ challengeId: ch.challengeId, authMethod: 'DEVICE_SECURITY_PIN_VALIDATION', operatorPin: '0000' }),
+    });
+    assert.strictEqual(wrongPin.status, 403);
+
+    const okPin = await fetch(`${srv.baseUrl}/api/veronica/authorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Surya-Client-Id': 'op-1' },
+      body: JSON.stringify({ challengeId: ch.challengeId, authMethod: 'DEVICE_SECURITY_PIN_VALIDATION', operatorPin: '9876' }),
+    });
+    assert.strictEqual(okPin.status, 200);
+    const authJson = await okPin.json();
+    assert.ok(authJson.authToken);
+
+    // Cross-namespace replay rejected
+    const crossLaunch = await fetch(`${srv.baseUrl}/api/apps/launch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Surya-Client-Id': 'op-evil' },
+      body: JSON.stringify({ appId: 'app_settings', challengeId: ch.challengeId, authToken: authJson.authToken }),
+    });
+    assert.strictEqual(crossLaunch.status, 403);
+
+    // Valid WS ticket issuance & WebSocket origin rejection
+    const ticketRes = await fetch(`${srv.baseUrl}/api/live/ticket`, { method: 'POST' });
+    assert.strictEqual(ticketRes.status, 200);
+    const { ticket } = await ticketRes.json();
+    assert.ok(ticket && ticket.length >= 16);
+
+    const { WebSocket } = await import('ws');
+    const wsUrlBadOrigin = srv.baseUrl.replace('http://', 'ws://') + `/api/live?ticket=${encodeURIComponent(ticket)}`;
+    await new Promise((resolve, reject) => {
+      const ws = new WebSocket(wsUrlBadOrigin, { headers: { Origin: 'https://untrusted.attacker.invalid' } });
+      ws.on('unexpected-response', (_req, res) => {
+        try {
+          assert.strictEqual(res.statusCode, 403);
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+      ws.on('error', () => resolve());
+      ws.on('open', () => {
+        ws.close();
+        reject(new Error('Untrusted Origin must be rejected during WebSocket handshake'));
+      });
+    });
+
+    // Missing ticket rejected (401)
+    const wsUrlMissingTicket = srv.baseUrl.replace('http://', 'ws://') + '/api/live';
+    await new Promise((resolve, reject) => {
+      const ws = new WebSocket(wsUrlMissingTicket, { headers: { Origin: 'https://localhost' } });
+      ws.on('unexpected-response', (_req, res) => {
+        try {
+          assert.strictEqual(res.statusCode, 401);
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+      ws.on('error', () => resolve());
+      ws.on('open', () => {
+        ws.close();
+        reject(new Error('Missing live ticket must be rejected'));
+      });
+    });
+  } finally {
+    await srv.stop();
+  }
+});
+
+// 39. Studio Sandbox CSP/Nonce Isolation & Optics No-Fake-Canvas Audit
+test('39. Studio Sandbox CSP/Nonce & StandardOpticsHUD Offline/Camera Verification', () => {
+  const studioSrc = fs.readFileSync(path.resolve('src/components/AppCreatorWorkspace.tsx'), 'utf8');
+  assert.ok(studioSrc.includes('Content-Security-Policy'), 'Studio preview must inject restrictive CSP');
+  assert.ok(studioSrc.includes("connect-src 'none'"), 'Studio preview CSP must block network egress');
+  assert.ok(studioSrc.includes('iframeRef.current?.contentWindow'), 'Studio must verify postMessage ev.source');
+  assert.ok(studioSrc.includes('sandboxNonceRef'), 'Studio must validate per-session nonce');
+  assert.ok(studioSrc.includes('handleExportBundle'), 'Studio must support exporting multi-file bundle JSON');
+
+  const opticsSrc = fs.readFileSync(path.resolve('src/components/StandardOpticsHUD.tsx'), 'utf8');
+  assert.doesNotMatch(opticsSrc, /BUDDY OPTICS CALIBRATION TARGET/, 'Must not synthesize fake calibration frames');
+  assert.ok(opticsSrc.includes('intelligenceRouter.getEffectiveStatus()'), 'Optics HUD must enforce offline guard');
+
+  const visionSrc = fs.readFileSync(path.resolve('src/components/SuryaVisionHUD.tsx'), 'utf8');
+  assert.ok(visionSrc.includes('isMountedRef'), 'Vision HUD must guard against camera stream leak on unmount');
+  assert.ok(visionSrc.includes('10 * 1024 * 1024'), 'Vision HUD must enforce 10MB image upload limit');
+});
+
+// 40. Android Release Config, ProGuard Rules, Dockerfile Non-Root & Release Docs Audit
+test('40. Android Release Config, ProGuard Keep Rules, Dockerfile Non-Root & Docs Audit', () => {
+  const capSrc = fs.readFileSync(path.resolve('capacitor.config.ts'), 'utf8');
+  assert.ok(capSrc.includes('cleartext: false'), 'Capacitor cleartext must be disabled for release');
+  assert.ok(capSrc.includes('allowMixedContent: false'), 'Capacitor allowMixedContent must be disabled');
+  assert.ok(capSrc.includes('webContentsDebuggingEnabled: false'), 'WebView remote debugging must be disabled');
+
+  const manifestSrc = fs.readFileSync(path.resolve('android/app/src/main/AndroidManifest.xml'), 'utf8');
+  assert.ok(manifestSrc.includes('android:allowBackup="false"'), 'AndroidManifest must set allowBackup=false');
+  assert.ok(manifestSrc.includes('android:usesCleartextTraffic="false"'), 'AndroidManifest must disable cleartext traffic');
+
+  const gradleSrc = fs.readFileSync(path.resolve('android/app/build.gradle'), 'utf8');
+  assert.ok(gradleSrc.includes('versionCode 130'), 'build.gradle must bump versionCode to 130');
+  assert.ok(gradleSrc.includes('minifyEnabled true'), 'Release buildType must enable R8 minification');
+  assert.ok(gradleSrc.includes('shrinkResources true'), 'Release buildType must enable resource shrinking');
+  assert.ok(gradleSrc.includes('BUDDY_KEYSTORE_PATH'), 'Release signing must read env-driven keystore path');
+
+  const proguardSrc = fs.readFileSync(path.resolve('android/app/proguard-rules.pro'), 'utf8');
+  assert.ok(proguardSrc.includes('com.surya.assistant.**'));
+  assert.ok(proguardSrc.includes('JavascriptInterface'));
+  assert.ok(proguardSrc.includes('com.google.mediapipe.**'));
+  assert.ok(proguardSrc.includes('com.google.mlkit.**'));
+
+  const dockerSrc = fs.readFileSync(path.resolve('Dockerfile'), 'utf8');
+  assert.ok(dockerSrc.includes('USER node'), 'Dockerfile must drop root privileges with USER node');
+
+  assert.ok(fs.existsSync(path.resolve('docs/PRODUCTION_RELEASE.md')), 'Production release doc must exist');
+});
+
+
 
 
 

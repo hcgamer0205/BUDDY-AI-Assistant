@@ -230,6 +230,9 @@ class VoiceProfileManager {
     const profile = VOICE_PROFILES[profileId];
     if (!profile) return;
 
+    const previousProfile = this.getActiveProfile();
+    const prevLangPrefix = (this.settings.language || 'en').slice(0, 2).toLowerCase();
+
     this.settings.profileId = profileId;
     this.settings.pitch = profile.pitch;
     this.settings.rate = profile.rate;
@@ -237,10 +240,9 @@ class VoiceProfileManager {
       this.settings.language = profile.preferredLang;
     }
 
-    // Reset explicit voice URI if switching across genders to allow auto-resolution of appropriate gender voice
-    const currentGender = profile.gender;
-    const previousProfile = this.getActiveProfile();
-    if (previousProfile && previousProfile.gender !== currentGender) {
+    const nextLangPrefix = (this.settings.language || 'en').slice(0, 2).toLowerCase();
+    // Reset explicit voice URI when switching across genders or language prefixes
+    if ((previousProfile && previousProfile.gender !== profile.gender) || prevLangPrefix !== nextLangPrefix) {
       this.settings.selectedVoiceURI = undefined;
     }
 

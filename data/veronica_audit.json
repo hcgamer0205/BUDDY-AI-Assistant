@@ -1,0 +1,51 @@
+[
+  {
+    "id": "audit_1795446097653",
+    "namespace": "03872f3814dd133275c61935",
+    "timestamp": "2026-11-23T15:01:37.653Z",
+    "action": "Security Auth Granted: app_settings",
+    "riskLevel": "MEDIUM",
+    "status": "AUTHORIZED",
+    "details": "Authorized via DEVICE_SECURITY_PIN_VALIDATION. Token issued.",
+    "actor": "SURYA_SECURITY"
+  },
+  {
+    "id": "audit_1795446021446",
+    "namespace": "03872f3814dd133275c61935",
+    "timestamp": "2026-11-23T15:00:21.446Z",
+    "action": "Security Auth Granted: app_settings",
+    "riskLevel": "MEDIUM",
+    "status": "AUTHORIZED",
+    "details": "Authorized via DEVICE_SECURITY_PIN_VALIDATION. Token issued.",
+    "actor": "SURYA_SECURITY"
+  },
+  {
+    "id": "audit_1795445938484",
+    "namespace": "c980d6a1f258f05a6d6b511b",
+    "timestamp": "2026-11-23T14:58:58.484Z",
+    "action": "Launch Intent: Android Settings",
+    "riskLevel": "MEDIUM",
+    "status": "EXECUTED",
+    "details": "Dispatched Android intent android.settings.SETTINGS for package com.android.settings (Param: none)",
+    "actor": "USER_DIRECTIVE"
+  },
+  {
+    "id": "audit_1795445938480",
+    "namespace": "c980d6a1f258f05a6d6b511b",
+    "timestamp": "2026-11-23T14:58:58.480Z",
+    "action": "Security Auth Granted: app_settings",
+    "riskLevel": "MEDIUM",
+    "status": "AUTHORIZED",
+    "details": "Authorized via DEVICE_SECURITY_PIN_VALIDATION. Token issued.",
+    "actor": "SURYA_SECURITY"
+  },
+  {
+    "id": "audit_01",
+    "timestamp": "2026-11-23T14:58:58.404Z",
+    "action": "System Boot & Telemetry Probe",
+    "riskLevel": "LOW",
+    "status": "EXECUTED",
+    "details": "BUDDY mobile core online with multilingual streaming engine",
+    "actor": "SYSTEM"
+  }
+]

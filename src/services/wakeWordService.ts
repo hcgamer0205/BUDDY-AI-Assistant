@@ -6,6 +6,7 @@
  */
 
 import { deviceBridgeService } from './deviceBridgeService';
+import { voiceProfileManager } from './voiceProfileManager';
 
 export interface WakeWordState {
   isActive: boolean;
@@ -68,7 +69,7 @@ class WakeWordService {
         this.recognition = new SpeechRec();
         this.recognition.continuous = true;
         this.recognition.interimResults = true;
-        this.recognition.lang = 'en-IN';
+        this.recognition.lang = voiceProfileManager.getSettings().language || 'en-IN';
 
         this.recognition.onstart = () => {
           this.isListening = true;
@@ -247,8 +248,16 @@ class WakeWordService {
   }
 
   private startListening() {
-    if (!this.recognition || !this.isActive) return;
+    if (!this.isActive) return;
+    if (!this.recognition) {
+      if (!deviceBridgeService.isNativeAndroid()) {
+        this.error = 'Continuous wake-word SpeechRecognition is not supported by this browser.';
+        this.notify();
+      }
+      return;
+    }
     try {
+      this.recognition.lang = voiceProfileManager.getSettings().language || 'en-IN';
       this.recognition.start();
     } catch {
       // SpeechRecognition may already be starting

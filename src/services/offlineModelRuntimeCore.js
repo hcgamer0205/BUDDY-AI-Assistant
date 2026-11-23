@@ -868,10 +868,10 @@ export class LocalInferenceRuntime {
               this.pendingGenerations.delete(requestId);
               resolve(accumulated);
             },
-            onError: (msg) => {
+            onError: (msg, code = 'GENERATION_ERROR') => {
               clearTimeout(timeoutId);
               this.pendingGenerations.delete(requestId);
-              reject(new LocalRuntimeError('GENERATION_ERROR', msg || 'On-device generation failed.'));
+              reject(new LocalRuntimeError(code, msg || 'On-device generation failed.'));
             },
           });
 
@@ -927,6 +927,10 @@ export class LocalInferenceRuntime {
     if (!detail || !detail.requestId) return;
     const handler = this.pendingGenerations.get(detail.requestId);
     if (!handler) return;
+    if (detail.cancelled) {
+      handler.onError('Generation cancelled by user.', 'GENERATION_CANCELLED');
+      return;
+    }
     if (detail.error) {
       handler.onError(detail.error);
       return;
@@ -947,7 +951,7 @@ export class LocalInferenceRuntime {
       } catch {}
     }
     for (const [reqId, h] of this.pendingGenerations.entries()) {
-      h.onError('Generation cancelled by user.');
+      h.onError('Generation cancelled by user.', 'GENERATION_CANCELLED');
       this.pendingGenerations.delete(reqId);
     }
     if (this.state.status === 'generating') {
@@ -1045,6 +1049,7 @@ export class IntelligenceRouter {
         const promptWithHistory = buildCompactOfflinePrompt(input, context, toolResult?.vaultSnippet);
         const res = await this.localRuntime.generateResponse(promptWithHistory, {
           onChunk: context.onStreamChunk,
+          signal: context.signal,
           systemPrompt:
             'You are BUDDY running completely offline on the user device. Be accurate, concise, and honest.',
         });
@@ -1089,14 +1094,19 @@ export class IntelligenceRouter {
         modelLabel: `Cloud · ${cloudRes.model || context.model || 'Gemini'}`,
         latencyMs: cloudRes.latencyMs || 0,
         ttftMs: cloudRes.ttftMs,
+        interactionId: cloudRes.interactionId,
         handledOffline: false,
       };
     } catch (err) {
+      if (err?.name === 'AbortError' || err?.code === 'ABORTED' || context.signal?.aborted) {
+        throw err;
+      }
       // In Auto mode, gracefully fall back to loaded local LLM if cloud backend is unreachable
       if (this.mode === 'auto' && status.localReady && this.localRuntime) {
         const fallbackPrompt = buildCompactOfflinePrompt(input, context);
         const localRes = await this.localRuntime.generateResponse(fallbackPrompt, {
           onChunk: context.onStreamChunk,
+          signal: context.signal,
           systemPrompt:
             'Cloud backend was unreachable. You are BUDDY answering offline on the user device.',
         });

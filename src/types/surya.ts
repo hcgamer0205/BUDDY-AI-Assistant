@@ -14,6 +14,8 @@ export interface ChatMessage {
   suggestedAction?: StarkActionPlan | null;
   telemetryData?: string;
   extensibilityPlan?: ExtensibilityPlan | null;
+  interactionId?: string;
+  routingPath?: string;
 }
 
 export interface StarkActionPlan {
@@ -55,6 +57,7 @@ export interface WorldModelMemory {
   key: string;
   value: string;
   confidence: number;
+  source?: 'user' | 'inferred' | 'system';
   updatedAt: string;
 }
 
@@ -186,6 +189,7 @@ export interface StudioVersionSnapshot {
   note: string;
   timestamp: string;
   previewHtml: string;
+  files?: AppFile[];
 }
 
 export interface GeneratedApp {

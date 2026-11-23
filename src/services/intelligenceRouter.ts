@@ -45,8 +45,11 @@ export const intelligenceRouter = new IntelligenceRouter({
         fastMode: context.responseMode === 'concise',
         responseMode: context.responseMode,
         preferredLanguage: context.language,
+        previousInteractionId: context.previousInteractionId,
+        resetConversation: context.resetConversation,
         userMemories: context.userMemories,
         deviceContext: context.deviceContext,
+        signal: context.signal,
       }
     );
     return res;

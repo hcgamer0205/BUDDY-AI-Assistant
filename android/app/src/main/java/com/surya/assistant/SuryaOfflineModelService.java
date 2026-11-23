@@ -589,9 +589,21 @@ public class SuryaOfflineModelService {
     }
 
     public void cancelGeneration() {
+        String cancelledId;
         synchronized (runtimeLock) {
             cancelRequested.set(true);
+            cancelledId = activeRequestId;
             activeRequestId = null;
+        }
+        if (cancelledId != null) {
+            try {
+                JSONObject ev = new JSONObject();
+                ev.put("requestId", cancelledId);
+                ev.put("chunk", "");
+                ev.put("done", true);
+                ev.put("cancelled", true);
+                jsEmitter.emit("onLocalLlmToken", ev.toString());
+            } catch (Exception ignored) {}
         }
     }
 
@@ -612,11 +624,25 @@ public class SuryaOfflineModelService {
             if (base64DataUrl == null || base64DataUrl.trim().isEmpty()) {
                 return "{\"error\":\"No image supplied.\"}";
             }
+            if (base64DataUrl.length() > 14_000_000) {
+                return "{\"error\":\"Image payload exceeds maximum offline processing size (10MB).\"}";
+            }
             String b64 = base64DataUrl.contains(",")
                 ? base64DataUrl.substring(base64DataUrl.indexOf(',') + 1)
                 : base64DataUrl;
             byte[] decoded = Base64.decode(b64, Base64.DEFAULT);
-            bitmap = BitmapFactory.decodeByteArray(decoded, 0, decoded.length);
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(decoded, 0, decoded.length, bounds);
+
+            int sampleSize = 1;
+            int maxDim = 1600;
+            while (bounds.outWidth / sampleSize > maxDim || bounds.outHeight / sampleSize > maxDim) {
+                sampleSize *= 2;
+            }
+            BitmapFactory.Options decodeOpts = new BitmapFactory.Options();
+            decodeOpts.inSampleSize = sampleSize;
+            bitmap = BitmapFactory.decodeByteArray(decoded, 0, decoded.length, decodeOpts);
             if (bitmap == null) {
                 return "{\"error\":\"Failed to decode image frame.\"}";
             }

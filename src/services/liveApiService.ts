@@ -4,7 +4,8 @@
  * and plays back 24kHz PCM responses seamlessly with interruption support.
  */
 
-import { getApiBaseUrl } from './apiService';
+import { apiService, getApiBaseUrl } from './apiService';
+import { intelligenceRouter } from './intelligenceRouter';
 
 export interface LiveSessionState {
   connected: boolean;
@@ -52,6 +53,7 @@ class LiveApiService {
   private nextPlayTime = 0;
   private activeSources: AudioBufferSourceNode[] = [];
   private listeners = new Set<LiveStateListener>();
+  private abortedAttempt = false;
   private state: LiveSessionState = {
     connected: false,
     connecting: false,
@@ -79,15 +81,16 @@ class LiveApiService {
     }
   }
 
-  private getWebSocketUrl(): string {
+  private getWebSocketUrl(ticket?: string): string {
     const base = getApiBaseUrl();
+    const qs = ticket ? `?ticket=${encodeURIComponent(ticket)}` : '';
     if (base) {
       const wsBase = base.replace(/^http:\/\//i, 'ws://').replace(/^https:\/\//i, 'wss://').replace(/\/+$/, '');
-      return `${wsBase}/api/live`;
+      return `${wsBase}/api/live${qs}`;
     }
     const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = typeof window !== 'undefined' ? window.location.host : 'localhost:3000';
-    return `${protocol}//${host}/api/live`;
+    return `${protocol}//${host}/api/live${qs}`;
   }
 
   private clearOutputQueue() {
@@ -130,23 +133,53 @@ class LiveApiService {
 
   public async connect(): Promise<void> {
     if (this.state.connected || this.state.connecting) return;
+
+    const routerStatus = intelligenceRouter.getEffectiveStatus();
+    if (routerStatus.mode === 'offline' || !routerStatus.networkOnline) {
+      this.setState({
+        connected: false,
+        connecting: false,
+        error:
+          routerStatus.mode === 'offline'
+            ? 'Gemini Live Voice is unavailable in Offline Mode. Switch to Auto or Online mode to stream live voice.'
+            : 'No internet connection detected. Gemini Live Voice requires an active backend connection.',
+      });
+      return;
+    }
+
+    this.abortedAttempt = false;
     this.setState({ connecting: true, error: null });
 
     try {
+      const ticketRes = await apiService.createLiveSessionTicket();
+      if (this.abortedAttempt) return;
+
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       this.inputCtx = new AudioCtx({ sampleRate: 16000 });
       this.outputCtx = new AudioCtx({ sampleRate: 24000 });
+      await Promise.all([
+        this.inputCtx.state === 'suspended' ? this.inputCtx.resume().catch(() => {}) : Promise.resolve(),
+        this.outputCtx.state === 'suspended' ? this.outputCtx.resume().catch(() => {}) : Promise.resolve(),
+      ]);
       this.nextPlayTime = this.outputCtx.currentTime;
 
       this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (this.abortedAttempt) {
+        this.disconnect();
+        return;
+      }
       const source = this.inputCtx.createMediaStreamSource(this.mediaStream);
       this.processor = this.inputCtx.createScriptProcessor(4096, 1, 1);
 
-      const wsUrl = this.getWebSocketUrl();
+      const wsUrl = this.getWebSocketUrl(ticketRes?.ticket);
       const ws = new WebSocket(wsUrl);
       this.ws = ws;
 
       ws.onopen = () => {
+        if (this.abortedAttempt) {
+          ws.close();
+          return;
+        }
         this.setState({ connected: true, connecting: false, error: null });
         source.connect(this.processor!);
         this.processor!.connect(this.inputCtx!.destination);
@@ -192,6 +225,7 @@ class LiveApiService {
   }
 
   public disconnect() {
+    this.abortedAttempt = true;
     this.clearOutputQueue();
     if (this.processor) {
       try {

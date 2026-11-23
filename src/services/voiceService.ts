@@ -284,7 +284,18 @@ class VoiceService {
     } catch {
       try {
         this.recognition.stop();
-        setTimeout(() => this.recognition.start(), 180);
+        setTimeout(() => {
+          try {
+            if (this.recognition && this.onResultCallback) {
+              this.recognition.lang = voiceProfileManager.getSettings().language || currentLang;
+              this.recognition.start();
+            }
+          } catch {
+            this.state.isListening = false;
+            this.state.error = 'Microphone recognition busy or blocked.';
+            this.notify();
+          }
+        }, 180);
       } catch {
         this.state.error = 'Could not access microphone.';
         this.notify();
@@ -399,16 +410,24 @@ class VoiceService {
     if (targetURI && availableVoices.length > 0) {
       const match = availableVoices.find((v) => v.voiceURI === targetURI || v.id === targetURI);
       if (match) {
+        const matchLangPrefix = (match.lang || '').slice(0, 2).toLowerCase();
+        const langMismatch = Boolean(matchLangPrefix && langPrefix && matchLangPrefix !== langPrefix);
+        const genderMismatch = activeProfile.gender === 'male' && match.gender !== 'male';
+        const warnings: string[] = [];
+        if (genderMismatch) {
+          warnings.push(`Selected voice "${match.name}" is not a verified male voice.`);
+        }
+        if (langMismatch) {
+          warnings.push(`Selected voice locale (${match.lang}) differs from requested language (${requestedLang}).`);
+        }
         return {
           voice: match,
           voiceURI: match.voiceURI,
           gender: match.gender,
           isVerifiedMale: match.gender === 'male',
           isExactSelection: true,
-          requiresVoiceInstall: activeProfile.gender === 'male' && match.gender !== 'male',
-          warningMessage: activeProfile.gender === 'male' && match.gender !== 'male'
-            ? `Selected voice "${match.name}" is not a verified male voice.`
-            : null,
+          requiresVoiceInstall: genderMismatch || langMismatch,
+          warningMessage: warnings.length > 0 ? warnings.join(' ') : null,
           appliedLanguage: match.lang || requestedLang,
           engine,
         };
@@ -688,7 +707,7 @@ class VoiceService {
       ttsReady: Boolean(this.synth),
       onDeviceSttSupported: false,
       localeSupportedOffline: Boolean(this.synth && this.synth.getVoices().some((v) => v.localService)),
-      note: 'Offline Android voice packs can be managed natively inside the SURYA Android APK.',
+      note: 'Offline Android voice packs can be managed natively inside the BUDDY Android APK.',
     };
   }
 

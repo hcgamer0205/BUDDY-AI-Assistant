@@ -35,6 +35,8 @@ export const SuryaVisionHUD: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeStreamRef = useRef<MediaStream | null>(null);
+  const isMountedRef = useRef(true);
 
   const [streamActive, setStreamActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -84,6 +86,18 @@ export const SuryaVisionHUD: React.FC = () => {
     });
   };
 
+  const stopCamera = () => {
+    const stream = activeStreamRef.current || (videoRef.current?.srcObject as MediaStream | null);
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+    activeStreamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setStreamActive(false);
+  };
+
   const startCamera = async () => {
     setCameraError(null);
     setUploadedPreview(null);
@@ -98,30 +112,35 @@ export const SuryaVisionHUD: React.FC = () => {
         audio: false,
       });
 
+      if (!isMountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      activeStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
+        if (!isMountedRef.current) {
+          stopCamera();
+          return;
+        }
         setStreamActive(true);
         soundFx.playAuthorize();
       }
     } catch {
-      setCameraError('Camera permission denied or unavailable. Upload an image to continue.');
-    }
-  };
-
-  const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
-      setStreamActive(false);
+      if (isMountedRef.current) {
+        setCameraError('Camera permission denied or unavailable. Upload an image to continue.');
+      }
     }
   };
 
   useEffect(() => {
+    isMountedRef.current = true;
     startCamera();
     const unsub = voiceService.subscribe((v) => setVoiceListening(v.isListening));
     return () => {
+      isMountedRef.current = false;
       stopCamera();
       unsub();
     };
@@ -147,10 +166,22 @@ export const SuryaVisionHUD: React.FC = () => {
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
+    if (!file.type || !file.type.startsWith('image/')) {
+      setAnalysisError('Please select a valid image file (PNG, JPEG, WebP, or GIF).');
+      soundFx.playAbort();
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setAnalysisError('Image exceeds the 10MB upload limit. Choose a smaller image.');
+      soundFx.playAbort();
+      return;
+    }
+    setAnalysisError(null);
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === 'string') {
+      if (typeof reader.result === 'string' && isMountedRef.current) {
         stopCamera();
         setUploadedPreview(reader.result);
         setCapturedFrame(reader.result);

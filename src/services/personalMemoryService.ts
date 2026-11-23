@@ -7,6 +7,7 @@
 import { WorldModelMemory } from '../types/surya';
 
 const MEMORY_STORAGE_KEY = 'surya_personal_memory_v2';
+const MEMORY_ENABLED_KEY = 'surya_personal_memory_enabled_v1';
 
 class PersonalMemoryService {
   private memories: WorldModelMemory[] = [];
@@ -19,18 +20,25 @@ class PersonalMemoryService {
   private loadFromStorage() {
     if (typeof window === 'undefined') return;
     try {
+      const enabledRaw = localStorage.getItem(MEMORY_ENABLED_KEY);
+      if (enabledRaw === 'false') {
+        this.isMemoryEnabled = false;
+      }
+
       const saved = localStorage.getItem(MEMORY_STORAGE_KEY);
-      if (saved) {
-        this.memories = JSON.parse(saved);
+      if (saved !== null) {
+        const parsed = JSON.parse(saved);
+        this.memories = Array.isArray(parsed) ? parsed : [];
       } else {
-        // Default seed memories for SURYA
+        // Default seed memories for BUDDY
         this.memories = [
           {
             id: 'mem_1',
             category: 'preference',
             key: 'voice_identity',
-            value: 'Suryadev — Radiant Command',
+            value: 'JARVIS — Sophisticated Assistant Command',
             confidence: 1.0,
+            source: 'system',
             updatedAt: new Date().toISOString(),
           },
           {
@@ -39,14 +47,16 @@ class PersonalMemoryService {
             key: 'primary_language',
             value: 'Multilingual (English & Hindi)',
             confidence: 0.95,
+            source: 'system',
             updatedAt: new Date().toISOString(),
           },
           {
             id: 'mem_3',
             category: 'context',
             key: 'active_platform',
-            value: 'SURYA Android Mobile Assistant (SDK 36)',
+            value: 'BUDDY Android Mobile Assistant (SDK 36)',
             confidence: 1.0,
+            source: 'system',
             updatedAt: new Date().toISOString(),
           },
           {
@@ -55,6 +65,7 @@ class PersonalMemoryService {
             key: 'privacy_policy',
             value: 'Zero silent recordings. Require explicit user authorization for high-risk operations.',
             confidence: 1.0,
+            source: 'system',
             updatedAt: new Date().toISOString(),
           },
         ];
@@ -87,9 +98,15 @@ class PersonalMemoryService {
     );
   }
 
-  public addMemory(category: WorldModelMemory['category'], key: string, value: string, confidence = 0.95): WorldModelMemory {
+  public addMemory(
+    category: WorldModelMemory['category'],
+    key: string,
+    value: string,
+    source: WorldModelMemory['source'] = 'user',
+    confidence = 0.95
+  ): WorldModelMemory {
     if (!this.isMemoryEnabled) {
-      throw new Error('Personal memory is currently disabled by user.');
+      throw new Error('Personal memory is currently paused by user.');
     }
 
     const existingIndex = this.memories.findIndex((m) => m.key.toLowerCase() === key.toLowerCase());
@@ -99,6 +116,7 @@ class PersonalMemoryService {
       key,
       value,
       confidence,
+      source,
       updatedAt: new Date().toISOString(),
     };
 
@@ -122,6 +140,11 @@ class PersonalMemoryService {
     };
     this.saveToStorage();
     return true;
+  }
+
+  public replaceAll(records: WorldModelMemory[]): void {
+    this.memories = Array.isArray(records) ? records.map((r) => ({ ...r })) : [];
+    this.saveToStorage();
   }
 
   public deleteMemory(id: string): boolean {
@@ -149,7 +172,13 @@ class PersonalMemoryService {
 
   public setEnabled(enabled: boolean): void {
     this.isMemoryEnabled = enabled;
+    if (typeof window !== 'undefined' && window.localStorage) {
+      try {
+        localStorage.setItem(MEMORY_ENABLED_KEY, String(enabled));
+      } catch {}
+    }
   }
 }
 
 export const personalMemoryService = new PersonalMemoryService();
+

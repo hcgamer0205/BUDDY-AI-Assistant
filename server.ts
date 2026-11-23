@@ -14,6 +14,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 const DEFAULT_ALLOWED_ORIGINS = [
@@ -47,13 +48,16 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
 }
 
 app.use((req: Request, res: Response, next: NextFunction) => {
+  const reqId = (typeof req.headers['x-request-id'] === 'string' && req.headers['x-request-id'].trim()) || crypto.randomUUID();
+  res.setHeader('X-Request-Id', reqId);
+
   const origin = req.headers.origin;
   if (origin && isAllowedOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, X-Surya-Client-Id');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, X-Surya-Client-Id, X-Request-Id');
 
   if (req.method === 'OPTIONS') {
     if (origin && !isAllowedOrigin(origin)) {
@@ -371,6 +375,68 @@ export function extractInteractionText(interaction: any): string {
   return '';
 }
 
+export function extractImagePayload(raw: string): { data: string; mimeType: string } | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.length > 14_000_000) return null;
+
+  let declaredMime: string | null = null;
+  let b64 = trimmed;
+  const hasDataPrefix = /^data:/i.test(trimmed);
+  if (hasDataPrefix) {
+    const match = trimmed.match(/^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=\s]+)$/i);
+    if (!match) return null;
+    declaredMime = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
+    b64 = match[2];
+  } else if (!/^[A-Za-z0-9+/=\s]+$/.test(b64)) {
+    return null;
+  }
+
+  const cleanBase64 = b64.replace(/\s+/g, '');
+  if (cleanBase64.length < 8) return null;
+
+  let header: Buffer;
+  try {
+    header = Buffer.from(cleanBase64.slice(0, 24), 'base64');
+  } catch {
+    return null;
+  }
+  if (header.length < 4) return null;
+
+  const isPng =
+    header.length >= 8 &&
+    header[0] === 0x89 &&
+    header[1] === 0x50 &&
+    header[2] === 0x4e &&
+    header[3] === 0x47;
+  const isJpeg = header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+  const isGif =
+    header.length >= 4 &&
+    header[0] === 0x47 &&
+    header[1] === 0x49 &&
+    header[2] === 0x46 &&
+    header[3] === 0x38;
+  const isWebp =
+    header.length >= 12 &&
+    header.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    header.subarray(8, 12).toString('ascii') === 'WEBP';
+
+  const sniffedMime = isPng
+    ? 'image/png'
+    : isJpeg
+    ? 'image/jpeg'
+    : isWebp
+    ? 'image/webp'
+    : isGif
+    ? 'image/gif'
+    : null;
+
+  if (!sniffedMime) return null;
+  if (declaredMime && declaredMime !== sniffedMime) return null;
+
+  return { data: cleanBase64, mimeType: sniffedMime };
+}
+
 export async function interactionWithFallback(
   ai: GoogleGenAI,
   params: {
@@ -382,11 +448,13 @@ export async function interactionWithFallback(
     response_format?: any;
     previous_interaction_id?: string;
     generation_config?: any;
+    allowFallback?: boolean;
   },
   fallbackModel = 'gemini-3.8-flash'
 ): Promise<{ text: string; response: any; modelUsed: string; fellBack: boolean; interactionId?: string }> {
   const resolvedModel = resolveGeminiModelName(params.model);
   const resolvedFallback = resolveGeminiModelName(fallbackModel);
+  const allowFallback = params.allowFallback !== false;
 
   // Normalize input across interactions API vs legacy contents
   let normalizedInput = params.input !== undefined ? params.input : params.contents;
@@ -456,7 +524,7 @@ export async function interactionWithFallback(
       interactionId: interaction?.id,
     };
   } catch (err: any) {
-    if (shouldFallbackToLite(err) && resolvedModel !== resolvedFallback) {
+    if (allowFallback && shouldFallbackToLite(err) && resolvedModel !== resolvedFallback) {
       console.warn(`[BUDDY Interactions] Fallback from ${params.model} to ${fallbackModel}: ${err?.message || err}`);
       const interaction = await callInteractions(resolvedFallback);
       const text = extractInteractionText(interaction);
@@ -521,11 +589,13 @@ export interface MemoryRecord {
   key: string;
   value: string;
   confidence: number;
+  source?: 'user' | 'inferred' | 'system';
   updatedAt: string;
 }
 
 export interface AuditLog {
   id: string;
+  namespace?: string;
   timestamp: string;
   action: string;
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
@@ -552,6 +622,7 @@ if (personalWorldModel.length === 0) {
       key: 'preferred_language',
       value: 'Auto-detect (Indian & International languages supported)',
       confidence: 1.0,
+      source: 'system',
       updatedAt: new Date().toISOString(),
     },
     {
@@ -560,6 +631,7 @@ if (personalWorldModel.length === 0) {
       key: 'response_mode',
       value: 'Fast Mode with real-time SSE streaming',
       confidence: 0.98,
+      source: 'system',
       updatedAt: new Date().toISOString(),
     },
     {
@@ -568,6 +640,7 @@ if (personalWorldModel.length === 0) {
       key: 'surya_security_protocol',
       value: 'Enforce cryptographic challenge and 3-second abort countdown on medium/high-risk device actions',
       confidence: 1.0,
+      source: 'system',
       updatedAt: new Date().toISOString(),
     },
     {
@@ -576,6 +649,7 @@ if (personalWorldModel.length === 0) {
       key: 'target_platform',
       value: 'BUDDY Android Mobile Assistant (SDK 36, Capacitor 8, Java 21)',
       confidence: 0.95,
+      source: 'system',
       updatedAt: new Date().toISOString(),
     },
   ];
@@ -662,6 +736,7 @@ function persistAuditLogs() {
 // Veronica Cryptographic Challenge Store
 interface VeronicaChallenge {
   challengeId: string;
+  namespace: string;
   actionId: string;
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
   authToken?: string;
@@ -671,6 +746,13 @@ interface VeronicaChallenge {
 
 const veronicaChallenges = new Map<string, VeronicaChallenge>();
 const VERONICA_SECRET_HMAC = process.env.VERONICA_SECRET || crypto.randomBytes(32).toString('hex');
+
+interface LiveTicket {
+  ticket: string;
+  namespace: string;
+  expiresAt: number;
+}
+const liveSessionTickets = new Map<string, LiveTicket>();
 
 // SURYA App Link Catalog (Android 11+ Package Visibility compliant)
 const STARK_INTENT_CATALOG = [
@@ -817,10 +899,32 @@ const SCIENTIFIC_DATABASE = [
 
 /* ---------------- API ROUTES ---------------- */
 
-// Apply optional API authentication to sensitive routes (GET /api/health remains public)
+// Apply optional API authentication to sensitive routes (GET /api/health & /api/ready remain public)
 app.use('/api', (req: Request, res: Response, next: NextFunction) => {
-  if (req.path === '/health') return next();
+  if (req.path === '/health' || req.path === '/ready') return next();
   return requireApiAuth(req, res, next);
+});
+
+app.get('/api/ready', (req: Request, res: Response) => {
+  return res.json({
+    ready: true,
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    authRequired: Boolean(getConfiguredApiToken()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post('/api/live/ticket', (req: Request, res: Response) => {
+  const ns = getUserNamespace(req);
+  const expiresAt = Date.now() + 60 * 1000;
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const sig = crypto
+    .createHmac('sha256', VERONICA_SECRET_HMAC)
+    .update(`${ns}:${expiresAt}:${nonce}`)
+    .digest('hex');
+  const ticket = `${nonce}.${expiresAt}.${sig}`;
+  liveSessionTickets.set(ticket, { ticket, namespace: ns, expiresAt });
+  return res.json({ ticket, expiresAt });
 });
 
 // 1. Available Models Registry
@@ -963,6 +1067,53 @@ Local Time: ${new Date().toLocaleTimeString()}`;
 
 const userLastInteractionMap = new Map<string, string>();
 
+// Background eviction timer (.unref() so test imports & serverless exits never block)
+const evictionTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [k, record] of rateLimitBuckets.entries()) {
+    record.timestamps = record.timestamps.filter((t) => now - t < 120000);
+    if (record.timestamps.length === 0) rateLimitBuckets.delete(k);
+  }
+  for (const [id, ch] of veronicaChallenges.entries()) {
+    if (now > ch.expiresAt) veronicaChallenges.delete(id);
+  }
+  for (const [t, ticket] of liveSessionTickets.entries()) {
+    if (now > ticket.expiresAt) liveSessionTickets.delete(t);
+  }
+  if (userLastInteractionMap.size > 500) {
+    const excess = userLastInteractionMap.size - 250;
+    let deleted = 0;
+    for (const key of userLastInteractionMap.keys()) {
+      userLastInteractionMap.delete(key);
+      deleted++;
+      if (deleted >= excess) break;
+    }
+  }
+}, 60 * 1000);
+if (typeof evictionTimer.unref === 'function') {
+  evictionTimer.unref();
+}
+
+function buildConversationPromptInput(
+  cleanMessage: string,
+  history: any[],
+  resolvedMode: 'concise' | 'detailed'
+): string {
+  const historySlice = resolvedMode === 'concise' ? history.slice(-6) : history.slice(-12);
+  if (historySlice.length === 0) return cleanMessage;
+  const formattedHistory = historySlice
+    .filter((msg: any) => msg && typeof msg.content === 'string' && (msg.role === 'user' || msg.role === 'assistant'))
+    .map((msg: any) => `${msg.role === 'assistant' ? 'Assistant' : 'User'}: ${sanitizeContent(msg.content.slice(0, 1500))}`)
+    .join('\n');
+  if (!formattedHistory) return cleanMessage;
+  return `Conversation Context:\n${formattedHistory}\n\nCurrent User Query:\n${cleanMessage}`;
+}
+
+function isExpiredInteractionError(err: any): boolean {
+  const msg = String(err?.message || err || '').toLowerCase();
+  return msg.includes('previous_interaction_id') || (err?.status === 404 && msg.includes('interaction'));
+}
+
 // 3. Ultra-Fast Real-Time Response Streaming via Server-Sent Events (SSE) & Interactions API
 app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) => {
   const {
@@ -976,10 +1127,11 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
     userMemories = [],
     deviceContext,
     previousInteractionId,
+    resetConversation = false,
   } = req.body;
 
-  if (!message || typeof message !== 'string') {
-    return res.status(400).json({ error: 'Message text is required.' });
+  if (!message || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ error: 'Non-empty message text is required.' });
   }
 
   if (message.length > 4000) {
@@ -1003,13 +1155,19 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
   });
 
   const sendSSE = (data: any) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    }
   };
 
   let clientDisconnected = false;
+  let activeStreamIterator: any = null;
   res.on('close', () => {
     if (!res.writableEnded) {
       clientDisconnected = true;
+      if (activeStreamIterator && typeof activeStreamIterator.return === 'function') {
+        activeStreamIterator.return().catch(() => {});
+      }
     }
   });
 
@@ -1024,31 +1182,28 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
   );
 
   const userNs = getUserNamespace(req);
-  const resolvedPrevId =
-    typeof previousInteractionId === 'string' && previousInteractionId.trim()
-      ? previousInteractionId.trim()
-      : userLastInteractionMap.get(userNs);
-
-  if (Array.isArray(history) && history.length === 0) {
+  if (resetConversation === true || (Array.isArray(history) && history.length === 0)) {
     userLastInteractionMap.delete(userNs);
   }
 
-  // Build input prompt preserving conversation context
-  const historySlice = resolvedMode === 'concise' ? history.slice(-6) : history.slice(-12);
-  let promptInput: any = cleanMessage;
-  if (!resolvedPrevId && historySlice.length > 0) {
-    const formattedHistory = historySlice
-      .filter((msg: any) => msg && typeof msg.content === 'string' && (msg.role === 'user' || msg.role === 'assistant'))
-      .map((msg: any) => `${msg.role === 'assistant' ? 'Assistant' : 'User'}: ${sanitizeContent(msg.content.slice(0, 1500))}`)
-      .join('\n');
-    promptInput = `Conversation Context:\n${formattedHistory}\n\nCurrent User Query:\n${cleanMessage}`;
-  }
+  let resolvedPrevId =
+    resetConversation === true
+      ? undefined
+      : typeof previousInteractionId === 'string' && previousInteractionId.trim()
+      ? previousInteractionId.trim()
+      : userLastInteractionMap.get(userNs);
+
+  const safeHistory = Array.isArray(history) ? history : [];
+  let promptInput: any = resolvedPrevId
+    ? cleanMessage
+    : buildConversationPromptInput(cleanMessage, safeHistory, resolvedMode);
 
   const startTime = Date.now();
   let firstTokenTime: number | null = null;
   let activeModel = model;
   let tokenCount = 0;
   let activeInteractionId = '';
+  let retriedWithoutPrevId = false;
 
   sendSSE({ type: 'start', model: activeModel, timestamp: new Date().toISOString() });
 
@@ -1069,8 +1224,15 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
           ? await withUpstreamTimeout(streamPromise, PRIMARY_UPSTREAM_TIMEOUT_MS, `Stream ${targetModel}`)
           : await streamPromise;
 
+      activeStreamIterator = streamResponse;
+
       for await (const event of streamResponse) {
-        if (clientDisconnected) break;
+        if (clientDisconnected) {
+          if (typeof (streamResponse as any)?.return === 'function') {
+            await (streamResponse as any).return().catch(() => {});
+          }
+          break;
+        }
         if (event.event_type === 'step.delta' && event.delta?.type === 'text') {
           const text = event.delta.text || '';
           if (text) {
@@ -1109,6 +1271,14 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
       }
       return true;
     } catch (err: any) {
+      if (resolvedPrevId && !retriedWithoutPrevId && isExpiredInteractionError(err)) {
+        retriedWithoutPrevId = true;
+        resolvedPrevId = undefined;
+        userLastInteractionMap.delete(userNs);
+        promptInput = buildConversationPromptInput(cleanMessage, safeHistory, resolvedMode);
+        return await streamFromModel(targetModel);
+      }
+
       console.warn(`[BUDDY Stream] Error on model ${targetModel}:`, sanitizeContent(String(err?.message || err)));
       const canFallback = shouldFallbackToLite(err) && autoFallback && targetModel !== 'gemini-3.8-flash';
 
@@ -1136,7 +1306,7 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
 
   const succeeded = await streamFromModel(activeModel);
 
-  if (succeeded) {
+  if (succeeded && !clientDisconnected) {
     const totalTimeMs = Date.now() - startTime;
     sendSSE({
       type: 'done',
@@ -1149,7 +1319,9 @@ app.post('/api/chat/stream', chatLimiter, async (req: Request, res: Response) =>
     });
   }
 
-  res.end();
+  if (!res.writableEnded) {
+    res.end();
+  }
 });
 
 // 4. Standard Non-Streaming Chat Endpoint (for compatibility) via Interactions API
@@ -1165,10 +1337,15 @@ app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
     userMemories = [],
     deviceContext,
     previousInteractionId,
+    resetConversation = false,
   } = req.body;
 
-  if (!message || typeof message !== 'string') {
-    return res.status(400).json({ error: 'Message text is required.' });
+  if (!message || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ error: 'Non-empty message text is required.' });
+  }
+
+  if (message.length > 4000) {
+    return res.status(400).json({ error: 'Message exceeds 4000 character limit.' });
   }
 
   const ai = getGeminiClient();
@@ -1191,36 +1368,54 @@ app.post('/api/chat', chatLimiter, async (req: Request, res: Response) => {
     );
 
     const userNs = getUserNamespace(req);
-    const resolvedPrevId =
-      typeof previousInteractionId === 'string' && previousInteractionId.trim()
-        ? previousInteractionId.trim()
-        : userLastInteractionMap.get(userNs);
-
-    if (Array.isArray(history) && history.length === 0) {
+    if (resetConversation === true || (Array.isArray(history) && history.length === 0)) {
       userLastInteractionMap.delete(userNs);
     }
 
-    const historySlice = resolvedMode === 'concise' ? history.slice(-6) : history.slice(-12);
-    let promptInput: any = cleanMessage;
-    if (!resolvedPrevId && historySlice.length > 0) {
-      const formattedHistory = historySlice
-        .filter((msg: any) => msg && typeof msg.content === 'string' && (msg.role === 'user' || msg.role === 'assistant'))
-        .map((msg: any) => `${msg.role === 'assistant' ? 'Assistant' : 'User'}: ${sanitizeContent(msg.content.slice(0, 1500))}`)
-        .join('\n');
-      promptInput = `Conversation Context:\n${formattedHistory}\n\nCurrent User Query:\n${cleanMessage}`;
-    }
+    let resolvedPrevId =
+      resetConversation === true
+        ? undefined
+        : typeof previousInteractionId === 'string' && previousInteractionId.trim()
+        ? previousInteractionId.trim()
+        : userLastInteractionMap.get(userNs);
+
+    const safeHistory = Array.isArray(history) ? history : [];
+    let promptInput: any = resolvedPrevId
+      ? cleanMessage
+      : buildConversationPromptInput(cleanMessage, safeHistory, resolvedMode);
 
     const startTime = Date.now();
-    const meta = await interactionWithFallback(
-      ai,
-      {
-        model: model || 'gemini-4-hydrogen',
-        input: promptInput,
-        system_instruction: systemInstruction,
-        ...(resolvedPrevId ? { previous_interaction_id: resolvedPrevId } : {}),
-      },
-      'gemini-3.8-flash'
-    );
+    let meta;
+    try {
+      meta = await interactionWithFallback(
+        ai,
+        {
+          model: model || 'gemini-4-hydrogen',
+          input: promptInput,
+          system_instruction: systemInstruction,
+          allowFallback: autoFallback !== false,
+          ...(resolvedPrevId ? { previous_interaction_id: resolvedPrevId } : {}),
+        },
+        'gemini-3.8-flash'
+      );
+    } catch (firstErr: any) {
+      if (resolvedPrevId && isExpiredInteractionError(firstErr)) {
+        userLastInteractionMap.delete(userNs);
+        promptInput = buildConversationPromptInput(cleanMessage, safeHistory, resolvedMode);
+        meta = await interactionWithFallback(
+          ai,
+          {
+            model: model || 'gemini-4-hydrogen',
+            input: promptInput,
+            system_instruction: systemInstruction,
+            allowFallback: autoFallback !== false,
+          },
+          'gemini-3.8-flash'
+        );
+      } else {
+        throw firstErr;
+      }
+    }
 
     if (meta.interactionId) {
       userLastInteractionMap.set(userNs, meta.interactionId);
@@ -1270,7 +1465,11 @@ app.post('/api/vision', visionLimiter, async (req: Request, res: Response) => {
   }
 
   try {
-    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+    const parsedImage = extractImagePayload(imageBase64);
+    if (!parsedImage) {
+      return res.status(400).json({ error: 'Invalid or unsupported image payload. Provide a valid PNG, JPEG, WebP, or GIF image.' });
+    }
+    const { data: cleanBase64, mimeType } = parsedImage;
 
     const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
@@ -1278,7 +1477,7 @@ app.post('/api/vision', visionLimiter, async (req: Request, res: Response) => {
         {
           type: 'image',
           data: cleanBase64,
-          mime_type: 'image/jpeg',
+          mime_type: mimeType,
         },
         {
           type: 'text',
@@ -1313,9 +1512,10 @@ Strictly ensure all telemetry remains peaceful, analytical, non-operational, and
   }
 });
 
-// 6. Veronica Security Challenge & Authorization Workflow
+// 6. Veronica Security Challenge & Authorization Workflow (Namespace Isolated + PIN verified)
 app.post('/api/veronica/challenge', veronicaLimiter, (req: Request, res: Response) => {
   const { actionId } = req.body;
+  const ns = getUserNamespace(req);
   const targetApp = STARK_INTENT_CATALOG.find((a) => a.id === actionId);
 
   if (!targetApp) {
@@ -1328,6 +1528,7 @@ app.post('/api/veronica/challenge', veronicaLimiter, (req: Request, res: Respons
 
   veronicaChallenges.set(challengeId, {
     challengeId,
+    namespace: ns,
     actionId,
     riskLevel: targetApp.riskLevel as any,
     expiresAt,
@@ -1345,10 +1546,11 @@ app.post('/api/veronica/challenge', veronicaLimiter, (req: Request, res: Respons
 });
 
 app.post('/api/veronica/authorize', veronicaLimiter, (req: Request, res: Response) => {
-  const { challengeId, authMethod } = req.body;
+  const { challengeId, authMethod, biometricToken, operatorPin } = req.body;
+  const ns = getUserNamespace(req);
   const challenge = veronicaChallenges.get(challengeId);
 
-  if (!challenge) {
+  if (!challenge || challenge.namespace !== ns) {
     return res.status(404).json({ error: 'Challenge not found or expired.' });
   }
 
@@ -1361,7 +1563,29 @@ app.post('/api/veronica/authorize', veronicaLimiter, (req: Request, res: Respons
     return res.status(403).json({ error: 'Challenge was aborted by user directive.' });
   }
 
-  const tokenPayload = `${challenge.challengeId}:${challenge.actionId}:${Date.now()}`;
+  if (authMethod === 'DEVICE_SECURITY_PIN_VALIDATION') {
+    const configuredPin = (process.env.VERONICA_OPERATOR_PIN || '').trim();
+    if (!configuredPin) {
+      return res.status(403).json({
+        error: 'Operator PIN verification unavailable: configure VERONICA_OPERATOR_PIN on the backend server or authorize with device biometrics.',
+        code: 'PIN_NOT_CONFIGURED',
+      });
+    }
+    const supplied = typeof operatorPin === 'string' ? operatorPin.trim() : '';
+    const expectedBuf = Buffer.from(configuredPin, 'utf-8');
+    const providedBuf = Buffer.from(supplied, 'utf-8');
+    if (!supplied || expectedBuf.length !== providedBuf.length || !crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+      return res.status(403).json({ error: 'Invalid operator security PIN.', code: 'INVALID_OPERATOR_PIN' });
+    }
+  } else if (authMethod === 'ANDROID_KEYSTORE_BIOMETRIC') {
+    if (!biometricToken || typeof biometricToken !== 'string') {
+      return res.status(403).json({ error: 'Missing native biometric assertion token.' });
+    }
+  } else if (authMethod !== 'WEBAUTHN_HARDWARE_BIOMETRIC') {
+    return res.status(403).json({ error: 'Unsupported verification method for security authorization.' });
+  }
+
+  const tokenPayload = `${challenge.challengeId}:${ns}:${challenge.actionId}:${Date.now()}`;
   const authToken = crypto
     .createHmac('sha256', VERONICA_SECRET_HMAC)
     .update(tokenPayload)
@@ -1372,11 +1596,12 @@ app.post('/api/veronica/authorize', veronicaLimiter, (req: Request, res: Respons
 
   const log: AuditLog = {
     id: `audit_${Date.now()}`,
+    namespace: ns,
     timestamp: new Date().toISOString(),
     action: `Security Auth Granted: ${challenge.actionId}`,
     riskLevel: challenge.riskLevel,
     status: 'AUTHORIZED',
-    details: `Authorized via ${authMethod || 'BIOMETRIC_OR_DEVICE_CREDENTIAL'}. Token issued.`,
+    details: `Authorized via ${sanitizeContent(String(authMethod || 'BIOMETRIC_OR_DEVICE_CREDENTIAL'))}. Token issued.`,
     actor: 'SURYA_SECURITY',
   };
   veronicaAuditLogs.unshift(log);
@@ -1393,9 +1618,10 @@ app.post('/api/veronica/authorize', veronicaLimiter, (req: Request, res: Respons
 
 app.post('/api/veronica/abort', veronicaLimiter, (req: Request, res: Response) => {
   const { challengeId, reason = 'Operator triggered emergency abort' } = req.body;
+  const ns = getUserNamespace(req);
   if (challengeId) {
     const challenge = veronicaChallenges.get(challengeId);
-    if (challenge) {
+    if (challenge && challenge.namespace === ns) {
       challenge.status = 'ABORTED';
       challenge.authToken = undefined;
     }
@@ -1403,6 +1629,7 @@ app.post('/api/veronica/abort', veronicaLimiter, (req: Request, res: Response) =
 
   const log: AuditLog = {
     id: `audit_${Date.now()}`,
+    namespace: ns,
     timestamp: new Date().toISOString(),
     action: 'Security Emergency Abort Triggered',
     riskLevel: 'HIGH',
@@ -1420,6 +1647,29 @@ app.post('/api/veronica/abort', veronicaLimiter, (req: Request, res: Response) =
   });
 });
 
+app.post('/api/veronica/audit', veronicaLimiter, (req: Request, res: Response) => {
+  const { action, riskLevel = 'LOW', status = 'EXECUTED', details = '' } = req.body;
+  if (!action || typeof action !== 'string') {
+    return res.status(400).json({ error: 'Audit action description is required.' });
+  }
+  const ns = getUserNamespace(req);
+  const validRisk = ['LOW', 'MEDIUM', 'HIGH'].includes(riskLevel) ? riskLevel : 'LOW';
+  const validStatus = ['AUTHORIZED', 'REJECTED', 'ABORTED', 'EXECUTED'].includes(status) ? status : 'EXECUTED';
+  const log: AuditLog = {
+    id: `audit_${Date.now()}_${crypto.randomBytes(2).toString('hex')}`,
+    namespace: ns,
+    timestamp: new Date().toISOString(),
+    action: sanitizeContent(action.slice(0, 200)),
+    riskLevel: validRisk as AuditLog['riskLevel'],
+    status: validStatus as AuditLog['status'],
+    details: sanitizeContent(String(details).slice(0, 500)),
+    actor: 'OPERATOR_DIRECTIVE',
+  };
+  veronicaAuditLogs.unshift(log);
+  persistAuditLogs();
+  return res.json({ success: true, log });
+});
+
 // 7. SURYA App Link Catalog & Verified Execution
 app.get('/api/apps', (req: Request, res: Response) => {
   return res.json({
@@ -1431,6 +1681,7 @@ app.get('/api/apps', (req: Request, res: Response) => {
 
 app.post('/api/apps/launch', (req: Request, res: Response) => {
   const { appId, customParam, challengeId, authToken } = req.body;
+  const ns = getUserNamespace(req);
   const targetApp = STARK_INTENT_CATALOG.find((a) => a.id === appId);
 
   if (!targetApp) {
@@ -1447,7 +1698,13 @@ app.post('/api/apps/launch', (req: Request, res: Response) => {
     }
 
     const challenge = veronicaChallenges.get(challengeId);
-    if (!challenge || challenge.actionId !== appId || challenge.status !== 'AUTHORIZED' || challenge.authToken !== authToken) {
+    if (
+      !challenge ||
+      challenge.namespace !== ns ||
+      challenge.actionId !== appId ||
+      challenge.status !== 'AUTHORIZED' ||
+      challenge.authToken !== authToken
+    ) {
       return res.status(403).json({
         error: 'Invalid or expired authorization token. Action rejected.',
         requiresChallenge: true,
@@ -1464,6 +1721,7 @@ app.post('/api/apps/launch', (req: Request, res: Response) => {
 
   const newLog: AuditLog = {
     id: `audit_${Date.now()}`,
+    namespace: ns,
     timestamp: new Date().toISOString(),
     action: `Launch Intent: ${targetApp.name}`,
     riskLevel: targetApp.riskLevel as any,
@@ -1496,8 +1754,8 @@ app.get('/api/memory', (req: Request, res: Response) => {
 app.post('/api/memory', (req: Request, res: Response) => {
   const ns = getUserNamespace(req);
   const memories = getMemoriesForUser(ns);
-  const { category = 'fact', key, value } = req.body;
-  if (!key || !value || typeof key !== 'string' || typeof value !== 'string') {
+  const { category = 'fact', key, value, source = 'user' } = req.body;
+  if (!key || !value || typeof key !== 'string' || typeof value !== 'string' || !key.trim() || !value.trim()) {
     return res.status(400).json({ error: 'Memory key and value are required.' });
   }
 
@@ -1507,15 +1765,20 @@ app.post('/api/memory', (req: Request, res: Response) => {
     });
   }
 
-  const cleanKey = sanitizeContent(key.slice(0, 100));
-  const cleanValue = sanitizeContent(value.slice(0, 500));
+  const cleanKey = sanitizeContent(key.trim().slice(0, 100));
+  const cleanValue = sanitizeContent(value.trim().slice(0, 500));
+  const validSource = source === 'inferred' || source === 'system' ? source : 'user';
 
   const existingIdx = memories.findIndex((m) => m.key.toLowerCase() === cleanKey.toLowerCase());
   if (existingIdx >= 0) {
     memories[existingIdx] = {
       ...memories[existingIdx],
       value: cleanValue,
+      category: ['preference', 'context', 'fact', 'directive'].includes(category)
+        ? category
+        : memories[existingIdx].category,
       confidence: 0.99,
+      source: validSource,
       updatedAt: new Date().toISOString(),
     };
     persistUserMemoryStores();
@@ -1527,12 +1790,52 @@ app.post('/api/memory', (req: Request, res: Response) => {
     category: ['preference', 'context', 'fact', 'directive'].includes(category) ? category : 'fact',
     key: cleanKey,
     value: cleanValue,
-    confidence: 0.95,
+    confidence: validSource === 'inferred' ? 0.85 : 0.95,
+    source: validSource,
     updatedAt: new Date().toISOString(),
   };
   memories.push(newRecord);
   persistUserMemoryStores();
   return res.json({ success: true, created: newRecord });
+});
+
+app.put('/api/memory/:id', (req: Request, res: Response) => {
+  const ns = getUserNamespace(req);
+  const memories = getMemoriesForUser(ns);
+  const { id } = req.params;
+  const { category, key, value, source } = req.body;
+
+  const idx = memories.findIndex((m) => m.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'Memory entry not found.' });
+  }
+
+  if ((key && containsSensitiveData(String(key))) || (value && containsSensitiveData(String(value)))) {
+    return res.status(400).json({
+      error: 'Security Policy Violation: Storing passwords, API keys, or authentication tokens in Personal World Model is strictly prohibited.',
+    });
+  }
+
+  const existing = memories[idx];
+  const updatedKey = typeof key === 'string' && key.trim() ? sanitizeContent(key.trim().slice(0, 100)) : existing.key;
+  const updatedVal = typeof value === 'string' && value.trim() ? sanitizeContent(value.trim().slice(0, 500)) : existing.value;
+  const updatedCategory =
+    typeof category === 'string' && ['preference', 'context', 'fact', 'directive'].includes(category)
+      ? (category as MemoryRecord['category'])
+      : existing.category;
+  const updatedSource = source === 'inferred' || source === 'system' || source === 'user' ? source : existing.source || 'user';
+
+  memories[idx] = {
+    ...existing,
+    key: updatedKey,
+    value: updatedVal,
+    category: updatedCategory,
+    source: updatedSource,
+    confidence: 1.0,
+    updatedAt: new Date().toISOString(),
+  };
+  persistUserMemoryStores();
+  return res.json({ success: true, memory: memories[idx] });
 });
 
 app.delete('/api/memory/:id', (req: Request, res: Response) => {
@@ -1556,11 +1859,13 @@ app.post('/api/memory/clear', (req: Request, res: Response) => {
   return res.json({ success: true, message: 'Personal World Model memory wiped for current operator.' });
 });
 
-// 9. Audit Logs
+// 9. Audit Logs (Namespace Filtered)
 app.get('/api/veronica/audit', (req: Request, res: Response) => {
+  const ns = getUserNamespace(req);
+  const scopedLogs = veronicaAuditLogs.filter((l) => !l.namespace || l.namespace === ns);
   return res.json({
-    logs: veronicaAuditLogs.slice(0, 50),
-    totalCount: veronicaAuditLogs.length,
+    logs: scopedLogs.slice(0, 50),
+    totalCount: scopedLogs.length,
     securityLevel: 'CRYPTOGRAPHIC_TOKEN_ACTIVE',
   });
 });
@@ -1702,6 +2007,10 @@ app.post('/api/vision/analyze', visionLimiter, async (req: Request, res: Respons
     return res.status(400).json({ error: 'Valid image base64 data is required for optical telemetry.' });
   }
 
+  if (imageBase64.length > 14000000) {
+    return res.status(413).json({ error: 'Image payload exceeds 10MB limit.' });
+  }
+
   const ai = getGeminiClient();
   if (!ai) {
     return res.status(503).json({
@@ -1712,7 +2021,11 @@ app.post('/api/vision/analyze', visionLimiter, async (req: Request, res: Respons
   }
 
   try {
-    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+    const parsedImage = extractImagePayload(imageBase64);
+    if (!parsedImage) {
+      return res.status(400).json({ error: 'Invalid or unsupported image payload. Provide a valid PNG, JPEG, WebP, or GIF image.' });
+    }
+    const { data: cleanBase64, mimeType } = parsedImage;
 
     const modeDirectives: Record<string, string> = {
       general: 'Perform full scene understanding, object identification, OCR extraction, and contextual advisory.',
@@ -1752,7 +2065,7 @@ Ensure all box coordinates are percentages (0 to 100). Keep all analysis strictl
         {
           type: 'image',
           data: cleanBase64,
-          mime_type: 'image/jpeg',
+          mime_type: mimeType,
         },
         {
           type: 'text',
@@ -1798,8 +2111,12 @@ Ensure all box coordinates are percentages (0 to 100). Keep all analysis strictl
 app.post('/api/vision/chat', visionLimiter, async (req: Request, res: Response) => {
   const { imageBase64, question, history = [] } = req.body;
 
-  if (!question || typeof question !== 'string') {
+  if (!question || typeof question !== 'string' || !question.trim()) {
     return res.status(400).json({ error: 'Question text is required.' });
+  }
+
+  if (typeof imageBase64 === 'string' && imageBase64.length > 14000000) {
+    return res.status(413).json({ error: 'Image payload exceeds 10MB limit.' });
   }
 
   const ai = getGeminiClient();
@@ -1813,11 +2130,14 @@ app.post('/api/vision/chat', visionLimiter, async (req: Request, res: Response) 
   try {
     const input: any[] = [];
     if (imageBase64 && typeof imageBase64 === 'string') {
-      const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+      const parsedImage = extractImagePayload(imageBase64);
+      if (!parsedImage) {
+        return res.status(400).json({ error: 'Invalid or unsupported image payload. Provide a valid PNG, JPEG, WebP, or GIF image.' });
+      }
       input.push({
         type: 'image',
-        data: cleanBase64,
-        mime_type: 'image/jpeg',
+        data: parsedImage.data,
+        mime_type: parsedImage.mimeType,
       });
     }
 
@@ -2129,16 +2449,8 @@ interface GeneratedAppRecord {
   lastModified: string;
 }
 
-let generatedAppsCatalog: GeneratedAppRecord[] = [];
-try {
-  if (fs.existsSync(APPS_FILE)) {
-    generatedAppsCatalog = JSON.parse(fs.readFileSync(APPS_FILE, 'utf-8'));
-  }
-} catch (e) {}
-
-// Pre-seed with rich original apps inspired by common requests (Video Sharing like YouTube, Notes Workspace)
-if (generatedAppsCatalog.length === 0) {
-  generatedAppsCatalog = [
+function createSeedStudioApps(): GeneratedAppRecord[] {
+  return [
     {
       id: 'app_suryatube',
       name: 'SuryaTube — Video Sharing & Creator Studio',
@@ -2158,25 +2470,33 @@ if (generatedAppsCatalog.length === 0) {
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-950 text-white min-h-screen">
-  <header class="p-4 bg-slate-900 border-b border-amber-500/30 flex items-center justify-between sticky top-0 z-10">
+  <header class="p-4 bg-slate-900 border-b border-emerald-500/30 flex items-center justify-between sticky top-0 z-10">
     <div class="flex items-center gap-2">
-      <div class="w-8 h-8 rounded-lg bg-amber-500 flex items-center justify-center font-bold text-black text-lg">▶</div>
-      <h1 class="font-bold text-lg tracking-wider text-amber-400">SuryaTube</h1>
+      <div class="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center font-bold text-black text-lg">▶</div>
+      <h1 class="font-bold text-lg tracking-wider text-emerald-400">SuryaTube</h1>
     </div>
-    <input id="searchBar" type="text" placeholder="Search videos & channels..." class="bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-full text-xs text-white w-64 focus:outline-none focus:border-amber-400" />
-    <button onclick="uploadModal()" class="px-3 py-1.5 bg-amber-500 text-black text-xs font-bold rounded-full hover:bg-amber-400">+ Upload</button>
+    <input id="searchBar" type="text" placeholder="Search videos & channels..." class="bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-full text-xs text-white w-64 focus:outline-none focus:border-emerald-400" />
+    <button onclick="showBanner('Creator upload workspace ready for local media selection.')" class="px-3 py-1.5 bg-emerald-500 text-black text-xs font-bold rounded-full hover:bg-emerald-400">+ Upload</button>
   </header>
+  <div id="statusBanner" class="hidden mx-4 mt-3 px-3 py-2 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-xs text-emerald-200"></div>
   <main class="p-4 grid grid-cols-1 md:grid-cols-3 gap-4" id="videoGrid"></main>
   <script>
     const videos = [
-      { id: 1, title: 'Exploring Quantum Telemetry with SURYA AI', channel: 'Solar Labs', views: '240K', time: '2 days ago' },
-      { id: 2, title: 'Building Native Android Apps with Java 21', channel: 'CodeStark', views: '110K', time: '1 week ago' },
-      { id: 3, title: 'Holographic Optics Architecture Walkthrough', channel: 'CyberOptics', views: '890K', time: '3 weeks ago' }
+      { id: 1, title: 'Exploring Edge Intelligence with BUDDY AI', channel: 'BUDDY Labs', views: '240K', time: '2 days ago' },
+      { id: 2, title: 'Building Native Android Apps with Java 21', channel: 'Mobile Core', views: '110K', time: '1 week ago' },
+      { id: 3, title: 'Emerald Optics Architecture Walkthrough', channel: 'CyberOptics', views: '890K', time: '3 weeks ago' }
     ];
-    function render() {
+    function showBanner(msg) {
+      const b = document.getElementById('statusBanner');
+      if (!b) return;
+      b.textContent = msg;
+      b.classList.remove('hidden');
+    }
+    function render(filter = '') {
       const grid = document.getElementById('videoGrid');
-      grid.innerHTML = videos.map(v => \`
-        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden hover:border-amber-500/50 transition-all cursor-pointer">
+      const items = videos.filter(v => !filter || v.title.toLowerCase().includes(filter));
+      grid.innerHTML = items.map(v => \`
+        <div onclick="showBanner('Loaded: ' + \${JSON.stringify(v.title)})" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden hover:border-emerald-500/50 transition-all cursor-pointer">
           <div class="aspect-video bg-slate-800 relative flex items-center justify-center">
             <span class="text-3xl">▶</span>
           </div>
@@ -2187,11 +2507,16 @@ if (generatedAppsCatalog.length === 0) {
         </div>
       \`).join('');
     }
+    document.getElementById('searchBar')?.addEventListener('input', (e) => render(e.target.value.toLowerCase()));
     render();
-    function uploadModal() { alert('SuryaTube Creator Studio: Video upload pipeline simulated.'); }
   </script>
 </body>
 </html>`,
+        },
+        {
+          path: 'app.config.json',
+          language: 'json',
+          content: JSON.stringify({ name: 'SuryaTube', category: 'Entertainment', version: '1.0.0' }, null, 2),
         },
       ],
       previewHtml: `<!DOCTYPE html>
@@ -2202,22 +2527,23 @@ if (generatedAppsCatalog.length === 0) {
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-950 text-white min-h-screen">
-  <header class="p-3 bg-slate-900 border-b border-amber-500/30 flex items-center justify-between sticky top-0 z-10">
+  <header class="p-3 bg-slate-900 border-b border-emerald-500/30 flex items-center justify-between sticky top-0 z-10">
     <div class="flex items-center gap-2">
-      <div class="w-7 h-7 rounded-lg bg-amber-500 flex items-center justify-center font-bold text-black text-sm">▶</div>
-      <h1 class="font-bold text-sm tracking-wider text-amber-400">SuryaTube</h1>
+      <div class="w-7 h-7 rounded-lg bg-emerald-500 flex items-center justify-center font-bold text-black text-sm">▶</div>
+      <h1 class="font-bold text-sm tracking-wider text-emerald-400">SuryaTube</h1>
     </div>
-    <button onclick="alert('Creator Dashboard Active')" class="px-2.5 py-1 bg-amber-500 text-black text-[11px] font-bold rounded-lg">+ Upload</button>
+    <button onclick="document.getElementById('studioNotice').textContent='Creator Dashboard Active'" class="px-2.5 py-1 bg-emerald-500 text-black text-[11px] font-bold rounded-lg">+ Upload</button>
   </header>
+  <div id="studioNotice" class="px-3 pt-2 text-[11px] text-emerald-300"></div>
   <main class="p-3 space-y-3">
-    <div class="bg-slate-900 border border-amber-500/40 rounded-xl p-3">
+    <div class="bg-slate-900 border border-emerald-500/40 rounded-xl p-3">
       <div class="aspect-video bg-gradient-to-tr from-slate-950 to-slate-800 rounded-lg flex items-center justify-center mb-2">
-        <button onclick="alert('Playing Solar Video Stream')" class="w-12 h-12 rounded-full bg-amber-500 text-black flex items-center justify-center text-xl font-bold shadow-lg shadow-amber-500/30">▶</button>
+        <button onclick="document.getElementById('studioNotice').textContent='Playback Ready — Tap player controls to preview'" class="w-12 h-12 rounded-full bg-emerald-500 text-black flex items-center justify-center text-xl font-bold shadow-lg shadow-emerald-500/30">▶</button>
       </div>
-      <h2 class="font-bold text-xs text-white">Exploring Quantum Telemetry with SURYA AI</h2>
-      <p class="text-[10px] text-slate-400 mt-0.5">Solar Labs · 240K views · 2 days ago</p>
+      <h2 class="font-bold text-xs text-white">Exploring Edge Intelligence with BUDDY AI</h2>
+      <p class="text-[10px] text-slate-400 mt-0.5">BUDDY Labs · 240K views · 2 days ago</p>
       <div class="flex items-center gap-2 mt-2 pt-2 border-t border-slate-800 text-[11px]">
-        <button onclick="this.innerText='👍 Liked'" class="text-slate-300 hover:text-amber-400">👍 18K</button>
+        <button onclick="this.innerText='👍 Liked'" class="text-slate-300 hover:text-emerald-400">👍 18K</button>
         <button class="text-slate-300">💬 1.2K</button>
         <button class="text-slate-300">🔗 Share</button>
       </div>
@@ -2232,25 +2558,72 @@ if (generatedAppsCatalog.length === 0) {
   ];
 }
 
+let userAppsStores: Record<string, GeneratedAppRecord[]> = {};
+try {
+  if (fs.existsSync(APPS_FILE)) {
+    const parsed = JSON.parse(fs.readFileSync(APPS_FILE, 'utf-8'));
+    if (Array.isArray(parsed)) {
+      userAppsStores = { default: parsed };
+    } else if (parsed && typeof parsed === 'object') {
+      userAppsStores = parsed;
+    }
+  }
+} catch (e) {}
+
+function getAppsForUser(namespace: string): GeneratedAppRecord[] {
+  if (!userAppsStores[namespace]) {
+    const legacy = userAppsStores.default || createSeedStudioApps();
+    userAppsStores[namespace] = JSON.parse(JSON.stringify(legacy));
+    persistApps();
+  }
+  return userAppsStores[namespace];
+}
+
 function persistApps() {
   try {
-    fs.writeFileSync(APPS_FILE, JSON.stringify(generatedAppsCatalog, null, 2), 'utf-8');
+    fs.writeFileSync(APPS_FILE, JSON.stringify(userAppsStores, null, 2), 'utf-8');
   } catch (e) {}
 }
 
+function buildMultiFileBundle(
+  htmlDoc: string,
+  appName: string,
+  category: string,
+  version: string
+): { path: string; language: string; content: string }[] {
+  const styleMatches = [...htmlDoc.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)];
+  const extractedCss = styleMatches.map((m) => m[1].trim()).filter(Boolean).join('\n\n') || '/* Tailwind CSS utilities active in index.html */';
+  const scriptMatches = [...htmlDoc.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/gi)];
+  const extractedJs = scriptMatches.map((m) => m[1].trim()).filter(Boolean).join('\n\n') || '// Interactive application script';
+  return [
+    { path: 'index.html', language: 'html', content: htmlDoc },
+    { path: 'styles.css', language: 'css', content: extractedCss },
+    { path: 'app.js', language: 'javascript', content: extractedJs },
+    {
+      path: 'app.config.json',
+      language: 'json',
+      content: JSON.stringify({ name: appName, category, version, generatedBy: 'BUDDY Studio' }, null, 2),
+    },
+  ];
+}
+
 app.get('/api/studio/apps', (req: Request, res: Response) => {
-  return res.json({ apps: generatedAppsCatalog, count: generatedAppsCatalog.length });
+  const ns = getUserNamespace(req);
+  const apps = getAppsForUser(ns);
+  return res.json({ apps, count: apps.length });
 });
 
 app.get('/api/studio/apps/:id', (req: Request, res: Response) => {
-  const foundApp = generatedAppsCatalog.find((a) => a.id === req.params.id);
+  const ns = getUserNamespace(req);
+  const apps = getAppsForUser(ns);
+  const foundApp = apps.find((a) => a.id === req.params.id);
   if (!foundApp) return res.status(404).json({ error: 'Generated app not found' });
   return res.json({ app: foundApp });
 });
 
 app.post('/api/apps/generate', async (req: Request, res: Response) => {
-  const { prompt, appName = 'Solar Custom App', category = 'Productivity' } = req.body;
-  if (!prompt || typeof prompt !== 'string') {
+  const { prompt, appName = 'BUDDY Custom App', category = 'Productivity' } = req.body;
+  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
     return res.status(400).json({ error: 'App specification prompt is required.' });
   }
 
@@ -2262,14 +2635,15 @@ app.post('/api/apps/generate', async (req: Request, res: Response) => {
     });
   }
 
+  const ns = getUserNamespace(req);
+  const apps = getAppsForUser(ns);
   const appId = `app_${Date.now()}`;
   let previewHtml = '';
 
   try {
     const codePrompt = `You are BUDDY App Creator. The user wants to build an application: "${sanitizeContent(prompt)}".
-Generate a complete, fully functional, beautiful single-page web app with Tailwind CSS.
-Include interactive elements, working javascript state, buttons, forms, and responsive mobile-first UI.
-Return ONLY valid HTML inside an <html> document with embedded <script> and Tailwind CDN.`;
+Generate a complete, fully functional, clean mobile-first web app using semantic HTML, Tailwind CSS CDN, <style> rules, and working <script> logic (interactive state, validation, persistent local state where helpful, no browser alert/confirm/prompt popups).
+Return ONLY valid HTML inside a complete <!DOCTYPE html><html>...</html> document.`;
 
     const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
@@ -2291,10 +2665,7 @@ Return ONLY valid HTML inside an <html> document with embedded <script> and Tail
     return res.status(502).json({ error: 'Upstream AI model returned invalid or empty application HTML.' });
   }
 
-  const generatedFiles = [
-    { path: 'index.html', language: 'html', content: previewHtml },
-    { path: 'app.config.json', language: 'json', content: JSON.stringify({ name: appName, category, version: '1.0.0' }, null, 2) },
-  ];
+  const generatedFiles = buildMultiFileBundle(previewHtml, sanitizeContent(appName), sanitizeContent(category), '1.0.0');
 
   const newApp: GeneratedAppRecord = {
     id: appId,
@@ -2310,7 +2681,7 @@ Return ONLY valid HTML inside an <html> document with embedded <script> and Tail
     lastModified: new Date().toISOString(),
   };
 
-  generatedAppsCatalog.unshift(newApp);
+  apps.unshift(newApp);
   persistApps();
 
   return res.json({ success: true, app: newApp, message: `Application ${newApp.name} created successfully!` });
@@ -2318,9 +2689,11 @@ Return ONLY valid HTML inside an <html> document with embedded <script> and Tail
 
 app.post('/api/apps/:id/modify', async (req: Request, res: Response) => {
   const { prompt } = req.body;
-  const appRecord = generatedAppsCatalog.find((a) => a.id === req.params.id);
+  const ns = getUserNamespace(req);
+  const apps = getAppsForUser(ns);
+  const appRecord = apps.find((a) => a.id === req.params.id);
   if (!appRecord) return res.status(404).json({ error: 'App not found' });
-  if (!prompt || typeof prompt !== 'string') {
+  if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
     return res.status(400).json({ error: 'Modification prompt is required.' });
   }
 
@@ -2334,12 +2707,12 @@ app.post('/api/apps/:id/modify', async (req: Request, res: Response) => {
 
   try {
     const editPrompt = `You are BUDDY App Creator. The current HTML code of the app is:
-${appRecord.previewHtml.slice(0, 6000)}
+${appRecord.previewHtml.slice(0, 8000)}
 
 The user asks to modify the app:
 "${sanitizeContent(prompt)}"
 
-Return the UPDATED complete standalone HTML code. Return ONLY valid HTML with embedded script and styling.`;
+Return the UPDATED complete standalone HTML code (no window.alert/confirm). Return ONLY valid HTML with embedded <style>, <script>, and Tailwind CDN.`;
 
     const meta = await interactionWithFallback(ai, {
       model: 'gemini-4-hydrogen',
@@ -2352,8 +2725,7 @@ Return the UPDATED complete standalone HTML code. Return ONLY valid HTML with em
       return res.status(502).json({ error: 'Upstream AI model returned insufficient modified HTML.' });
     }
     appRecord.previewHtml = updatedHtml;
-    const htmlFile = appRecord.files.find((f) => f.path === 'index.html');
-    if (htmlFile) htmlFile.content = updatedHtml;
+    appRecord.files = buildMultiFileBundle(updatedHtml, appRecord.name, appRecord.category, appRecord.version);
   } catch (err: any) {
     const classified = classifyGeminiUpstreamError(err);
     return res.status(classified.status).json({
@@ -2368,9 +2740,11 @@ Return the UPDATED complete standalone HTML code. Return ONLY valid HTML with em
 });
 
 app.delete('/api/apps/:id', (req: Request, res: Response) => {
-  generatedAppsCatalog = generatedAppsCatalog.filter((a) => a.id !== req.params.id);
+  const ns = getUserNamespace(req);
+  const apps = getAppsForUser(ns);
+  userAppsStores[ns] = apps.filter((a) => a.id !== req.params.id);
   persistApps();
-  return res.json({ success: true, remaining: generatedAppsCatalog.length });
+  return res.json({ success: true, remaining: userAppsStores[ns].length });
 });
 
 // 19. SURYA Studio AI Debugger & Error Analyzer
@@ -2490,7 +2864,7 @@ app.get('/api/studio/github', async (req: Request, res: Response) => {
 // 21. Multi-Agent Orchestration & Goal Decomposition Endpoint
 app.post('/api/agents/orchestrate', chatLimiter, async (req: Request, res: Response) => {
   const { goal, userContext = '' } = req.body;
-  if (!goal || typeof goal !== 'string') {
+  if (!goal || typeof goal !== 'string' || !goal.trim()) {
     return res.status(400).json({ error: 'Goal prompt is required.' });
   }
 
@@ -2597,17 +2971,69 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   return res.status(500).json({ error: 'Internal server error.' });
 });
 
-// Live API Real-Time Audio WebSocket Bridge
+// Live API Real-Time Audio WebSocket Bridge (Origin + Ticket/Bearer Auth Hardened)
 const httpServer = http.createServer(app);
-const wss = new WebSocketServer({ server: httpServer, path: '/api/live' });
+const wss = new WebSocketServer({
+  server: httpServer,
+  path: '/api/live',
+  maxPayload: 262144, // 256KB max audio frame
+  verifyClient: (info, cb) => {
+    const origin = info.req.headers.origin;
+    if (origin && !isAllowedOrigin(origin)) {
+      cb(false, 403, 'Origin not permitted');
+      return;
+    }
+
+    const url = new URL(info.req.url || '/api/live', 'http://localhost');
+    const ticketParam = url.searchParams.get('ticket') || '';
+    const configuredToken = getConfiguredApiToken();
+
+    if (ticketParam) {
+      const record = liveSessionTickets.get(ticketParam);
+      if (!record || Date.now() > record.expiresAt) {
+        liveSessionTickets.delete(ticketParam);
+        cb(false, 401, 'Invalid or expired Live API session ticket');
+        return;
+      }
+      liveSessionTickets.delete(ticketParam); // Single-use ticket
+      cb(true);
+      return;
+    }
+
+    if (configuredToken) {
+      const authHeader = info.req.headers.authorization;
+      const bearer = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+        ? authHeader.slice(7).trim()
+        : '';
+      const expectedBuf = Buffer.from(configuredToken, 'utf-8');
+      const providedBuf = Buffer.from(bearer, 'utf-8');
+      if (bearer && expectedBuf.length === providedBuf.length && crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+        cb(true);
+        return;
+      }
+    }
+
+    cb(false, 401, 'Live API session ticket required');
+  },
+});
 
 wss.on('connection', async (clientWs) => {
   const ai = getGeminiClient();
   if (!ai) {
     clientWs.send(JSON.stringify({ error: 'Gemini AI service unavailable. Server GEMINI_API_KEY is not configured.' }));
-    clientWs.close();
+    clientWs.close(1011, 'Gemini unavailable');
     return;
   }
+
+  let closedByClient = false;
+  let sessionRef: any = null;
+  let frameWindowStart = Date.now();
+  let frameCount = 0;
+
+  clientWs.on('close', () => {
+    closedByClient = true;
+    try { sessionRef?.close?.(); } catch (_) {}
+  });
 
   try {
     const session = await ai.live.connect({
@@ -2621,6 +3047,7 @@ wss.on('connection', async (clientWs) => {
       },
       callbacks: {
         onmessage: (message: LiveServerMessage) => {
+          if (closedByClient || clientWs.readyState !== clientWs.OPEN) return;
           for (const part of message.serverContent?.modelTurn?.parts ?? []) {
             if (part.inlineData?.data) {
               clientWs.send(JSON.stringify({ audio: part.inlineData.data }));
@@ -2631,38 +3058,56 @@ wss.on('connection', async (clientWs) => {
           }
         },
         onerror: (err: any) => {
-          console.warn('[BUDDY Live API] Live session error:', err?.message || err);
+          console.warn('[BUDDY Live API] Live session error:', sanitizeContent(String(err?.message || err)));
           try {
-            clientWs.send(JSON.stringify({ error: err?.message || 'Live session error' }));
+            if (clientWs.readyState === clientWs.OPEN) {
+              clientWs.send(JSON.stringify({ error: sanitizeContent(String(err?.message || 'Live session error')) }));
+            }
           } catch (_) {}
         },
         onclose: () => {
-          try { clientWs.close(); } catch (_) {}
+          try {
+            if (clientWs.readyState === clientWs.OPEN) clientWs.close();
+          } catch (_) {}
         },
       },
     });
+    sessionRef = session;
+
+    if (closedByClient) {
+      try { session.close(); } catch (_) {}
+      return;
+    }
 
     clientWs.on('message', (data: any) => {
       try {
+        const now = Date.now();
+        if (now - frameWindowStart > 1000) {
+          frameWindowStart = now;
+          frameCount = 0;
+        }
+        frameCount++;
+        if (frameCount > 80) {
+          return; // Drop excess bursts to protect upstream Live connection
+        }
+
         const msg = JSON.parse(data.toString());
-        if (msg.audio) {
+        if (typeof msg.audio === 'string' && msg.audio.length > 0 && msg.audio.length <= 180000) {
           session.sendRealtimeInput({
             audio: { data: msg.audio, mimeType: 'audio/pcm;rate=16000' },
           });
         }
-      } catch (err) {
-        // parse error ignored
+      } catch (_) {
+        // Malformed frames ignored safely
       }
     });
-
-    clientWs.on('close', () => {
-      try { session.close(); } catch (_) {}
-    });
   } catch (err: any) {
-    console.error('[BUDDY Live API] Failed to connect:', err);
+    console.error('[BUDDY Live API] Failed to connect:', sanitizeContent(String(err?.message || err)));
     try {
-      clientWs.send(JSON.stringify({ error: err?.message || 'Failed to initialize live session' }));
-      clientWs.close();
+      if (clientWs.readyState === clientWs.OPEN) {
+        clientWs.send(JSON.stringify({ error: sanitizeContent(String(err?.message || 'Failed to initialize live session')) }));
+        clientWs.close();
+      }
     } catch (_) {}
   }
 });

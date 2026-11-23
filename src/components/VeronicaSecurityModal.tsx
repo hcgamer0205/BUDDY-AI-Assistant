@@ -70,7 +70,8 @@ export const VeronicaSecurityModal: React.FC<VeronicaSecurityModalProps> = ({
           try {
             const res = await apiService.authorizeVeronicaChallenge(
               challenge.challengeId,
-              'ANDROID_BIOMETRIC_HARDWARE'
+              'ANDROID_KEYSTORE_BIOMETRIC',
+              detail.token || detail.signature || detail.message || 'android_biometric_verified'
             );
             setAuthenticated(true);
             setIsAuthenticating(false);
@@ -159,7 +160,7 @@ export const VeronicaSecurityModal: React.FC<VeronicaSecurityModalProps> = ({
           if (credential) {
             const res = await apiService.authorizeVeronicaChallenge(
               challenge.challengeId,
-              'WEBAUTHN_PLATFORM_AUTHENTICATOR'
+              'WEBAUTHN_HARDWARE_BIOMETRIC'
             );
             setAuthenticated(true);
             setIsAuthenticating(false);
@@ -190,14 +191,11 @@ export const VeronicaSecurityModal: React.FC<VeronicaSecurityModalProps> = ({
     setAuthError(null);
 
     try {
-      // Validate device PIN (Operator Master Passcode: 1024 or device screen lock)
-      if (operatorPin.trim() !== '1024' && operatorPin.trim() !== '0000') {
-        throw new Error('Invalid Device Security PIN. Access denied.');
-      }
-
       const res = await apiService.authorizeVeronicaChallenge(
         challenge.challengeId,
-        'DEVICE_SECURITY_PIN_VALIDATION'
+        'DEVICE_SECURITY_PIN_VALIDATION',
+        undefined,
+        operatorPin.trim()
       );
       setAuthenticated(true);
       setIsAuthenticating(false);
@@ -291,7 +289,7 @@ export const VeronicaSecurityModal: React.FC<VeronicaSecurityModalProps> = ({
                 maxLength={6}
                 value={operatorPin}
                 onChange={(e) => setOperatorPin(e.target.value)}
-                placeholder="Enter PIN (e.g. 1024)"
+                placeholder="Enter Operator Security PIN"
                 className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-400 rounded px-3 py-2 text-center text-base tracking-widest font-mono text-slate-100 focus:outline-none"
                 autoFocus
               />

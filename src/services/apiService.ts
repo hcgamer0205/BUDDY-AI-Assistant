@@ -64,6 +64,7 @@ export interface ClientChatContext {
   responseMode?: ResponseMode;
   preferredLanguage?: string;
   previousInteractionId?: string;
+  resetConversation?: boolean;
   userMemories?: { key: string; value: string; category?: string }[];
   deviceContext?: Record<string, any>;
   signal?: AbortSignal;
@@ -600,6 +601,7 @@ export const apiService = {
         responseMode: clientContext?.responseMode || 'concise',
         preferredLanguage: clientContext?.preferredLanguage || 'auto',
         previousInteractionId: clientContext?.previousInteractionId,
+        resetConversation: Boolean(clientContext?.resetConversation),
         userMemories: clientContext?.userMemories || [],
         deviceContext: clientContext?.deviceContext,
       }),
@@ -642,6 +644,7 @@ export const apiService = {
             responseMode: clientContext?.responseMode || 'concise',
             preferredLanguage: clientContext?.preferredLanguage || 'auto',
             previousInteractionId: clientContext?.previousInteractionId,
+            resetConversation: Boolean(clientContext?.resetConversation),
             userMemories: clientContext?.userMemories || [],
             deviceContext: clientContext?.deviceContext,
           }),
@@ -704,6 +707,50 @@ export const apiService = {
       let ttftMs: number | undefined;
       let totalTimeMs: number | undefined;
 
+      let doneEventPayload: any = null;
+      const processSseLine = (line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) return;
+        const jsonStr = trimmed.slice(5).trim();
+        if (!jsonStr) return;
+
+        let event: any;
+        try {
+          event = JSON.parse(jsonStr);
+        } catch {
+          return;
+        }
+
+        if (event.type === 'start' && event.model) {
+          metaModel = event.model;
+        } else if (event.type === 'fallback' && event.fallbackModel) {
+          metaModel = event.fallbackModel;
+        } else if (event.type === 'ttft' && typeof event.ttftMs === 'number') {
+          ttftMs = event.ttftMs;
+        } else if (event.type === 'chunk' && typeof event.text === 'string') {
+          receivedAnyChunk = true;
+          accumulatedText += event.text;
+          onChunk(accumulatedText);
+        } else if (typeof event.chunk === 'string') {
+          receivedAnyChunk = true;
+          accumulatedText += event.chunk;
+          onChunk(accumulatedText);
+        } else if (event.type === 'error' || event.error) {
+          const errCode: GatewayErrorCode =
+            event.code === 'GEMINI_AUTH_FAILED' || event.code === 'MODEL_UNAVAILABLE'
+              ? event.code
+              : 'SERVER_ERROR';
+          throw new GatewayHttpError(event.error || 'Stream error received from BUDDY engine', {
+            code: errCode,
+            connectionState: errCode === 'GEMINI_AUTH_FAILED' ? 'AUTHENTICATION_REQUIRED' : 'SERVER_ERROR',
+            retryable: false,
+            url,
+          });
+        } else if (event.type === 'done' || event.done) {
+          doneEventPayload = event;
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -713,65 +760,39 @@ export const apiService = {
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-          const jsonStr = trimmed.slice(5).trim();
-          if (!jsonStr) continue;
-
-          let event: any;
-          try {
-            event = JSON.parse(jsonStr);
-          } catch {
-            continue;
-          }
-
-          if (event.type === 'start' && event.model) {
-            metaModel = event.model;
-          } else if (event.type === 'fallback' && event.fallbackModel) {
-            metaModel = event.fallbackModel;
-          } else if (event.type === 'ttft' && typeof event.ttftMs === 'number') {
-            ttftMs = event.ttftMs;
-          } else if (event.type === 'chunk' && typeof event.text === 'string') {
-            receivedAnyChunk = true;
-            accumulatedText += event.text;
-            onChunk(accumulatedText);
-          } else if (typeof event.chunk === 'string') {
-            receivedAnyChunk = true;
-            accumulatedText += event.chunk;
-            onChunk(accumulatedText);
-          } else if (event.type === 'error' || event.error) {
-            const errCode: GatewayErrorCode =
-              event.code === 'GEMINI_AUTH_FAILED' || event.code === 'MODEL_UNAVAILABLE'
-                ? event.code
-                : 'SERVER_ERROR';
-            throw new GatewayHttpError(event.error || 'Stream error received from BUDDY engine', {
-              code: errCode,
-              connectionState: errCode === 'GEMINI_AUTH_FAILED' ? 'AUTHENTICATION_REQUIRED' : 'SERVER_ERROR',
-              retryable: false,
-              url,
-            });
-          } else if (event.type === 'done' || event.done) {
-            if (event.model) metaModel = event.model;
-            totalTimeMs = event.totalTimeMs ?? event.latencyMs;
-            ttftMs = ttftMs ?? event.firstTokenMs;
-            updateSnapshot({
-              state: 'CONNECTED',
-              lastSuccessAt: new Date().toISOString(),
-              lastCheckedAt: new Date().toISOString(),
-              lastHttpStatus: 200,
-              lastError: null,
-              lastErrorCode: null,
-            });
-            return {
-              text: accumulatedText || event.fullText || '',
-              model: metaModel,
-              interactionId: event.interactionId,
-              latencyMs: totalTimeMs || 0,
-              ttftMs,
-              timestamp: new Date().toISOString(),
-            };
-          }
+          processSseLine(line);
+          if (doneEventPayload) break;
         }
+        if (doneEventPayload) break;
+      }
+
+      if (!doneEventPayload && buffer.trim()) {
+        for (const trailing of buffer.split('\n')) {
+          processSseLine(trailing);
+          if (doneEventPayload) break;
+        }
+      }
+
+      if (doneEventPayload) {
+        if (doneEventPayload.model) metaModel = doneEventPayload.model;
+        totalTimeMs = doneEventPayload.totalTimeMs ?? doneEventPayload.latencyMs;
+        ttftMs = ttftMs ?? doneEventPayload.firstTokenMs;
+        updateSnapshot({
+          state: 'CONNECTED',
+          lastSuccessAt: new Date().toISOString(),
+          lastCheckedAt: new Date().toISOString(),
+          lastHttpStatus: 200,
+          lastError: null,
+          lastErrorCode: null,
+        });
+        return {
+          text: accumulatedText || doneEventPayload.fullText || '',
+          model: metaModel,
+          interactionId: doneEventPayload.interactionId,
+          latencyMs: totalTimeMs || 0,
+          ttftMs,
+          timestamp: new Date().toISOString(),
+        };
       }
 
       if (accumulatedText) {
@@ -863,11 +884,18 @@ export const apiService = {
   async authorizeVeronicaChallenge(
     challengeId: string,
     authMethod: string,
-    clientSignature?: string
+    biometricToken?: string,
+    operatorPin?: string
   ): Promise<VeronicaAuthorizeResponse> {
     return requestJson('/api/veronica/authorize', {
       method: 'POST',
-      body: JSON.stringify({ challengeId, authMethod, clientSignature }),
+      body: JSON.stringify({ challengeId, authMethod, biometricToken, operatorPin }),
+    });
+  },
+
+  async createLiveSessionTicket(): Promise<{ ticket: string; expiresAt: number }> {
+    return requestJson('/api/live/ticket', {
+      method: 'POST',
     });
   },
 
@@ -973,11 +1001,22 @@ export const apiService = {
   async addMemory(
     key: string,
     value: string,
-    category: WorldModelMemory['category'] = 'fact'
+    category: WorldModelMemory['category'] = 'fact',
+    source: WorldModelMemory['source'] = 'user'
   ): Promise<{ success: boolean; created?: WorldModelMemory }> {
     return requestJson('/api/memory', {
       method: 'POST',
-      body: JSON.stringify({ key, value, category }),
+      body: JSON.stringify({ key, value, category, source }),
+    });
+  },
+
+  async updateMemory(
+    id: string,
+    updates: Partial<Pick<WorldModelMemory, 'key' | 'value' | 'category' | 'source'>>
+  ): Promise<{ success: boolean; memory: WorldModelMemory }> {
+    return requestJson(`/api/memory/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
     });
   },
 

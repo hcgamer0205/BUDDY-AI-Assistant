@@ -43,6 +43,7 @@ import { voiceProfileManager } from './services/voiceProfileManager';
 import { wakeWordService } from './services/wakeWordService';
 import { deviceBridgeService } from './services/deviceBridgeService';
 import { suryaOrchestrator } from './services/suryaOrchestrator';
+import { buddyOrchestrator } from './services/buddyOrchestrator';
 import { productivityService } from './services/productivityService';
 import { intelligenceRouter } from './services/intelligenceRouter';
 import { SuryaThemeConfig } from './types/suryaTheme';
@@ -121,7 +122,7 @@ export default function App() {
   // Veronica Modal Interception State
   const [veronicaTargetApp, setVeronicaTargetApp] = useState<{
     app: StarkApp;
-    onAuthorized: () => void;
+    onAuthorized: (challengeId: string, authToken: string) => void;
   } | null>(null);
 
   // Latest state refs for async callbacks
@@ -296,6 +297,8 @@ export default function App() {
   const handleClearHistory = useCallback(() => {
     soundFx.playClick();
     voiceService.stopSpeaking();
+    buddyOrchestrator.resetConversation();
+    setIsProcessingChat(false);
     const fresh = [WELCOME_MESSAGE()];
     setMessages(fresh);
     if (typeof window !== 'undefined' && window.localStorage) {
@@ -303,6 +306,11 @@ export default function App() {
         window.localStorage.removeItem(CHAT_STORAGE_KEY);
       } catch {}
     }
+  }, []);
+
+  const handleStopGenerating = useCallback(() => {
+    buddyOrchestrator.cancelActiveGeneration();
+    setIsProcessingChat(false);
   }, []);
 
   // Subscriptions + offline reminder ticker
@@ -381,7 +389,7 @@ export default function App() {
 
   // Execute Action Plan with Veronica Guard
   const handleExecutePlan = (plan: StarkActionPlan) => {
-    if (plan.riskLevel === 'HIGH') {
+    if (plan.riskLevel === 'HIGH' || plan.riskLevel === 'MEDIUM') {
       const mockApp: StarkApp = {
         id: plan.actionId,
         name: plan.name,
@@ -391,16 +399,25 @@ export default function App() {
         category: 'Security',
         icon: 'ShieldAlert',
         description: `Intent ${plan.intent}`,
-        riskLevel: 'HIGH',
+        riskLevel: plan.riskLevel,
       };
 
       setVeronicaTargetApp({
         app: mockApp,
-        onAuthorized: async () => {
+        onAuthorized: async (challengeId, authToken) => {
           setVeronicaTargetApp(null);
           const sentLocal = deviceBridgeService.launchApp(mockApp.package, mockApp.action);
           if (!sentLocal) {
-            await apiService.launchStarkApp(mockApp.id, plan.param, 'challenge_auth', 'token_auth');
+            try {
+              await apiService.launchStarkApp(mockApp.id, plan.param, challengeId, authToken);
+            } catch (err: any) {
+              soundFx.playAbort();
+              setAppBanner({
+                message: `Action dispatch warning: ${err?.message || 'Unable to execute verified intent'}`,
+                tone: 'warn',
+              });
+              return;
+            }
           }
           soundFx.playAuthorize();
         },
@@ -675,6 +692,7 @@ export default function App() {
               setSystemOpenSection('offline');
               setCurrentTab('system');
             }}
+            onStopGenerating={handleStopGenerating}
           />
         )}
 

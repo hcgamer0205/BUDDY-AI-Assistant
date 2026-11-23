@@ -13,16 +13,16 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     androidScheme: 'https',
-    cleartext: true,
+    cleartext: false,
   },
   android: {
     buildOptions: {
       keystorePath: undefined,
       releaseType: 'APK',
     },
-    allowMixedContent: true,
+    allowMixedContent: false,
     captureInput: true,
-    webContentsDebuggingEnabled: true,
+    webContentsDebuggingEnabled: false,
   },
   plugins: {
     CapacitorCookies: {

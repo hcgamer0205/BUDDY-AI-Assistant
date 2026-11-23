@@ -10,10 +10,12 @@ COPY tsconfig.json vite.config.ts index.html server.ts ./
 COPY src ./src
 
 # Build frontend production bundle so Express can serve static assets when needed
-RUN npm run build
+RUN npm run build && mkdir -p /app/data && chown -R node:node /app
 
 ENV NODE_ENV=production
 ENV PORT=8080
+
+USER node
 
 EXPOSE 8080
 

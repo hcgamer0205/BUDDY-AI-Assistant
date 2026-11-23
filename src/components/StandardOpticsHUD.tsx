@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Camera, RefreshCw, Eye, ShieldCheck, Crosshair, AlertCircle } from 'lucide-react';
 import { apiService } from '../services/apiService';
+import { intelligenceRouter } from '../services/intelligenceRouter';
 import { soundFx } from '../services/soundFx';
 
 export const StandardOpticsHUD: React.FC = () => {
@@ -63,42 +64,43 @@ export const StandardOpticsHUD: React.FC = () => {
 
   // Capture frame and send to Gemini Vision
   const captureAndAnalyze = async () => {
+    const routerSnap = intelligenceRouter.getEffectiveStatus();
+    if (routerSnap.mode === 'offline' || !routerSnap.networkOnline) {
+      soundFx.playAbort();
+      setTelemetryResult(
+        'Offline mode active: online Gemini optical analysis is disabled. Use BUDDY Vision HUD for on-device ML Kit OCR and QR scanning, or switch back Online.'
+      );
+      return;
+    }
+
+    if (!streamActive || !videoRef.current || !canvasRef.current || !videoRef.current.videoWidth) {
+      soundFx.playAbort();
+      setTelemetryResult(
+        'Camera stream is not active yet. Enable the optical sensor feed first to capture a real frame.'
+      );
+      return;
+    }
+
     soundFx.playRadarSweep();
     setIsAnalyzing(true);
     setTelemetryResult(null);
 
     let base64Image = '';
-
-    if (streamActive && videoRef.current && canvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        base64Image = canvas.toDataURL('image/jpeg', 0.85);
-      }
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      base64Image = canvas.toDataURL('image/jpeg', 0.85);
     }
 
-    // Fallback if camera stream is blocked (e.g. sandbox restriction)
     if (!base64Image) {
-      // Create a simulated HUD optical calibration frame
-      const canvas = document.createElement('canvas');
-      canvas.width = 400;
-      canvas.height = 300;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.fillStyle = '#070f1e';
-        ctx.fillRect(0, 0, 400, 300);
-        ctx.strokeStyle = '#00f0ff';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(40, 40, 320, 220);
-        ctx.fillStyle = '#00f0ff';
-        ctx.font = '16px monospace';
-        ctx.fillText('BUDDY OPTICS CALIBRATION TARGET', 60, 150);
-        base64Image = canvas.toDataURL('image/jpeg', 0.85);
-      }
+      soundFx.playAbort();
+      setIsAnalyzing(false);
+      setTelemetryResult('Unable to capture frame from the active camera stream.');
+      return;
     }
 
     try {

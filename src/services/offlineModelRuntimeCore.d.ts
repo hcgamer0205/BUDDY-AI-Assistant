@@ -101,6 +101,7 @@ export class LocalInferenceRuntime {
     requestId: string;
     chunk?: string;
     done?: boolean;
+    cancelled?: boolean;
     error?: string;
   }): void;
   cancelGeneration(): void;
@@ -123,6 +124,7 @@ export interface RoutedResponse {
   modelLabel: string;
   latencyMs: number;
   ttftMs?: number;
+  interactionId?: string;
   handledOffline: boolean;
 }
 

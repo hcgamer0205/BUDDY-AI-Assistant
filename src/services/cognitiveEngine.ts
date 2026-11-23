@@ -45,6 +45,7 @@ export interface PlannedSubtask {
   status: 'pending' | 'executing' | 'awaiting_approval' | 'succeeded' | 'failed';
   result?: string;
   verified: boolean;
+  retries?: number;
 }
 
 export interface TaskPlan {
@@ -476,12 +477,24 @@ class CognitiveEngine {
       step.status = 'executing';
       this.notify();
 
-      try {
-        await this.runSubtaskAction(step, plan);
-      } catch (err: any) {
-        step.status = 'failed';
-        step.result = err?.message || 'Execution failed.';
-        step.verified = false;
+      const canRetryTransient =
+        step.actionType === 'health_check' || step.actionType === 'vault_query' || step.actionType === 'studio_scaffold';
+      const maxAttempts = canRetryTransient ? 2 : 1;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          await this.runSubtaskAction(step, plan);
+          if ((step.status as string) === 'succeeded' || !canRetryTransient || attempt === maxAttempts - 1) {
+            break;
+          }
+        } catch (err: any) {
+          step.retries = (step.retries || 0) + 1;
+          if (attempt === maxAttempts - 1) {
+            step.status = 'failed';
+            step.result = err?.message || 'Execution failed.';
+            step.verified = false;
+          }
+        }
       }
       this.notify();
     }
@@ -595,6 +608,22 @@ class CognitiveEngine {
     step.status = 'succeeded';
     step.result = `Completed by ${step.agent}.`;
     step.verified = true;
+  }
+
+  public cancelPlan(planId: string): boolean {
+    const plan = this.activePlans.find((p) => p.id === planId);
+    if (!plan) return false;
+    for (const step of plan.subtasks) {
+      if (step.status === 'pending' || step.status === 'awaiting_approval' || step.status === 'executing') {
+        step.status = 'failed';
+        step.result = 'Plan cancelled by user.';
+        step.verified = false;
+      }
+    }
+    plan.overallVerified = false;
+    plan.summary = 'Plan execution cancelled by operator.';
+    this.notify();
+    return true;
   }
 
   public getActivePlans(): TaskPlan[] {
