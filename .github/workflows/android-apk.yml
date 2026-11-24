@@ -108,8 +108,32 @@ jobs:
             gradle lintDebug assembleDebug --no-daemon --stacktrace
           fi
 
-      - name: Build Signed Release APK (when keystore secret configured)
-        if: ${{ secrets.BUDDY_KEYSTORE_BASE64 != '' }}
+      - name: Check Release Signing Secret Configuration
+        id: signing_check
+        env:
+          HAS_KEYSTORE: ${{ secrets.BUDDY_KEYSTORE_BASE64 != '' }}
+          HAS_KEYSTORE_PASSWORD: ${{ secrets.BUDDY_KEYSTORE_PASSWORD != '' }}
+          HAS_KEY_ALIAS: ${{ secrets.BUDDY_KEY_ALIAS != '' }}
+          HAS_KEY_PASSWORD: ${{ secrets.BUDDY_KEY_PASSWORD != '' }}
+        run: |
+          if [ "$HAS_KEYSTORE" = "true" ] && [ "$HAS_KEYSTORE_PASSWORD" = "true" ] && [ "$HAS_KEY_ALIAS" = "true" ] && [ "$HAS_KEY_PASSWORD" = "true" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "All required Android release signing secrets are configured."
+          elif [ "$HAS_KEYSTORE" = "true" ] || [ "$HAS_KEYSTORE_PASSWORD" = "true" ] || [ "$HAS_KEY_ALIAS" = "true" ] || [ "$HAS_KEY_PASSWORD" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            missing=""
+            [ "$HAS_KEYSTORE" != "true" ] && missing="${missing} BUDDY_KEYSTORE_BASE64"
+            [ "$HAS_KEYSTORE_PASSWORD" != "true" ] && missing="${missing} BUDDY_KEYSTORE_PASSWORD"
+            [ "$HAS_KEY_ALIAS" != "true" ] && missing="${missing} BUDDY_KEY_ALIAS"
+            [ "$HAS_KEY_PASSWORD" != "true" ] && missing="${missing} BUDDY_KEY_PASSWORD"
+            echo "::warning::Partial Android release signing secrets detected (missing:${missing}). Skipping signed release APK build; debug APK will still be built."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Android release signing secrets are not configured. Skipping signed release APK build."
+          fi
+
+      - name: Build Signed Release APK (when all signing secrets configured)
+        if: steps.signing_check.outputs.ready == 'true'
         working-directory: android
         env:
           BUDDY_KEYSTORE_BASE64: ${{ secrets.BUDDY_KEYSTORE_BASE64 }}
@@ -117,19 +141,31 @@ jobs:
           BUDDY_KEY_ALIAS: ${{ secrets.BUDDY_KEY_ALIAS }}
           BUDDY_KEY_PASSWORD: ${{ secrets.BUDDY_KEY_PASSWORD }}
         run: |
-          echo "$BUDDY_KEYSTORE_BASE64" | base64 --decode > buddy-release.jks
-          export BUDDY_KEYSTORE_PATH="$(pwd)/buddy-release.jks"
+          set -euo pipefail
+          KEYSTORE_TMP="$(mktemp "${RUNNER_TEMP:-/tmp}/buddy-release-XXXXXX.jks")"
+          cleanup() {
+            rm -f "$KEYSTORE_TMP"
+          }
+          trap cleanup EXIT
+
+          chmod 600 "$KEYSTORE_TMP"
+          printf '%s' "$BUDDY_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$KEYSTORE_TMP"
+          if [ ! -s "$KEYSTORE_TMP" ]; then
+            echo "::error::Decoded release keystore file is empty."
+            exit 1
+          fi
+
+          export BUDDY_KEYSTORE_PATH="$KEYSTORE_TMP"
           if [ -f "./gradlew" ]; then
             ./gradlew assembleRelease --no-daemon --stacktrace
           else
             gradle assembleRelease --no-daemon --stacktrace
           fi
-          rm -f buddy-release.jks
 
       - name: Compute SHA-256 Checksum & Diagnostics
         run: |
           mkdir -p release-apk
-          find android/app/build/outputs/apk/ -name "*.apk" -type f | while read -r apk; do
+          find android/app/build/outputs/apk/ -name "*.apk" -type f | sort | while read -r apk; do
             echo "Found APK: $apk"
             sha256sum "$apk" > "${apk}.sha256"
             cp "$apk" release-apk/Surya-Android.apk
@@ -145,4 +181,6 @@ jobs:
             release-apk/*
             android/app/build/outputs/apk/debug/*.apk
             android/app/build/outputs/apk/debug/*.sha256
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/apk/release/*.sha256
           if-no-files-found: warn

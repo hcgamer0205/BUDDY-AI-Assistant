@@ -172,6 +172,11 @@ test('3. GitHub Actions Android APK Pipeline Verification', () => {
   assert.ok(content.includes('gradle-version 8.11.1'), 'Workflow must specify Gradle 8.11.1');
   assert.ok(content.includes('VITE_API_BASE_URL'), 'Workflow must inject VITE_API_BASE_URL into production web build');
   assert.ok(content.includes('Surya-Android.apk'), 'Artifact must be Surya-Android.apk');
+  assert.doesNotMatch(content, /^\s*if:\s*.*\bsecrets\./m, 'Workflow must never reference secrets context inside an if: condition');
+  for (const secretName of ['BUDDY_KEYSTORE_BASE64', 'BUDDY_KEYSTORE_PASSWORD', 'BUDDY_KEY_ALIAS', 'BUDDY_KEY_PASSWORD']) {
+    assert.ok(content.includes(secretName), `Workflow must check signing secret ${secretName}`);
+  }
+  assert.ok(content.includes('trap cleanup EXIT'), 'Workflow must clean up temporary keystore files on exit');
 });
 
 // 4. Deterministic Local Intent Command Execution (0ms - No Gemini Call)
