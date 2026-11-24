@@ -10,11 +10,6 @@ import {
   ChevronDown,
   ChevronRight,
   RefreshCw,
-  Save,
-  Wifi,
-  RotateCcw,
-  KeyRound,
-  AlertTriangle,
   CheckCircle,
   AlertCircle,
   Download,
@@ -76,13 +71,13 @@ interface SystemHealthDashboardProps {
 }
 
 const STATE_LABELS: Record<ConnectionState, { label: string; dot: string; text: string }> = {
-  CONNECTED: { label: 'Connected', dot: 'bg-emerald-400', text: 'text-emerald-300' },
+  CONNECTED: { label: 'Gemini Ready', dot: 'bg-emerald-400', text: 'text-emerald-300' },
   CONNECTING: { label: 'Connecting', dot: 'bg-amber-400', text: 'text-amber-300' },
-  DISCONNECTED: { label: 'Standby', dot: 'bg-slate-400', text: 'text-slate-300' },
-  TIMEOUT: { label: 'Timeout', dot: 'bg-amber-400', text: 'text-amber-300' },
+  DISCONNECTED: { label: 'Server Unavailable', dot: 'bg-rose-400', text: 'text-rose-300' },
+  TIMEOUT: { label: 'Server Unavailable', dot: 'bg-rose-400', text: 'text-rose-300' },
   UNAVAILABLE: { label: 'Server Unavailable', dot: 'bg-rose-400', text: 'text-rose-300' },
-  AUTHENTICATION_REQUIRED: { label: 'Auth Failure', dot: 'bg-amber-400', text: 'text-amber-200' },
-  SERVER_ERROR: { label: 'Server Error', dot: 'bg-rose-400', text: 'text-rose-200' },
+  AUTHENTICATION_REQUIRED: { label: 'Server Unavailable', dot: 'bg-rose-400', text: 'text-rose-300' },
+  SERVER_ERROR: { label: 'Server Unavailable', dot: 'bg-rose-400', text: 'text-rose-300' },
   RATE_LIMITED: { label: 'Rate Limited', dot: 'bg-orange-400', text: 'text-orange-200' },
 };
 
@@ -140,10 +135,7 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
   } | null>(null);
   const [permissionNote, setPermissionNote] = useState<string | null>(null);
 
-  // Optional Server Gateway State
-  const [backendUrl, setBackendUrl] = useState<string>(() => apiService.getApiBaseUrl());
-  const [apiTokenInput, setApiTokenInput] = useState<string>(() => apiService.getApiToken());
-  const [showToken, setShowToken] = useState(false);
+  // Cloud Connectivity Diagnostic State
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [gatewayNotice, setGatewayNotice] = useState<{
     text: string;
@@ -164,9 +156,8 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
       setDownloadedCount(modelDownloadManager.getDownloadedModels().length);
     });
 
-    deviceBridgeService.refreshTelemetry();
+    loadAllDiagnostics();
     if (apiService.isBackendConfigured()) {
-      loadAllDiagnostics();
       modelPreferenceService.refreshFromServer().catch(() => {});
     }
 
@@ -183,8 +174,8 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
 
   const loadAllDiagnostics = () => {
     deviceBridgeService.refreshTelemetry();
+    loadHealth();
     if (apiService.isBackendConfigured()) {
-      loadHealth();
       checkUpdates();
       loadSecurityReport();
     }
@@ -252,73 +243,36 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
     }
   };
 
-  // ---------------- OPTIONAL SERVER GATEWAY HANDLERS ----------------
-
-  const handleSaveUrlOnly = () => {
-    soundFx.playClick();
-    const validation = apiService.setApiBaseUrl(backendUrl, { requireNonEmpty: true });
-    if (!validation.valid) {
-      soundFx.playAbort();
-      setGatewayNotice({ text: validation.error || 'Invalid server URL.', tone: 'err' });
-      return false;
-    }
-
-    apiService.setApiToken(apiTokenInput);
-    setBackendUrl(apiService.getApiBaseUrl());
-
-    if (validation.warning) {
-      setGatewayNotice({ text: `Saved with notice: ${validation.warning}`, tone: 'warn' });
-    } else {
-      setGatewayNotice({
-        text: 'Optional server URL saved. Run Test Connection to verify reachability.',
-        tone: 'info',
-      });
-    }
-    return true;
-  };
+  // ---------------- CLOUD SERVICE CONNECTION CHECK ----------------
 
   const handleTestConnection = async () => {
     soundFx.playClick();
     setIsTestingConnection(true);
-    setGatewayNotice({ text: 'Testing optional /api/health endpoint...', tone: 'info' });
+    setGatewayNotice({ text: 'Checking BUDDY cloud service health...', tone: 'info' });
     try {
       const data = await apiService.checkBackendConnection();
       setHealth(data);
-      await Promise.all([loadSecurityReport(), checkUpdates()]);
+      await Promise.all([
+        loadSecurityReport(),
+        checkUpdates(),
+        modelPreferenceService.refreshFromServer().catch(() => {}),
+      ]);
       soundFx.playAuthorize();
       setGatewayNotice({
-        text: `Optional server connected · Active model: ${data.activeModel}`,
-        tone: 'ok',
+        text: data.geminiConfigured
+          ? `Gemini Ready · Cloud service online (${data.activeModel}).`
+          : 'Cloud service reachable, but Gemini API credentials are not configured on the server yet.',
+        tone: data.geminiConfigured ? 'ok' : 'warn',
       });
     } catch (err: any) {
       soundFx.playAbort();
       setGatewayNotice({
-        text: err?.message || 'Optional server connection failed.',
+        text: err?.message || 'Server unavailable. Check your internet connection or use On-Device Offline AI.',
         tone: 'err',
       });
     } finally {
       setIsTestingConnection(false);
     }
-  };
-
-  const handleSaveAndTest = async () => {
-    const ok = handleSaveUrlOnly();
-    if (!ok) return;
-    await handleTestConnection();
-  };
-
-  const handleResetGateway = () => {
-    soundFx.playClick();
-    apiService.setApiBaseUrl('');
-    apiService.setApiToken('');
-    setBackendUrl(apiService.getApiBaseUrl());
-    setApiTokenInput(apiService.getApiToken());
-    setHealth(null);
-    setSecurityReport(null);
-    setGatewayNotice({
-      text: 'Custom server gateway cleared. Web runtime uses built-in /api endpoints automatically.',
-      tone: 'info',
-    });
   };
 
   const loadHealth = async () => {
@@ -389,22 +343,33 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
   };
 
   // Top Header Honest Status (Server-Side Gemini Interactions API + Offline AI)
+  const isCloudVerifiedReady =
+    connStatus.state === 'CONNECTED' && connStatus.geminiConfigured === true;
+
   const topStatusMeta = (() => {
-    if (routerStatus.mode === 'offline') {
+    if (routerStatus.mode === 'offline' || routerStatus.activePath === 'on-device-llm') {
       return routerStatus.localReady
-        ? { label: 'Offline AI Active', dot: 'bg-emerald-400', text: 'text-emerald-300' }
+        ? { label: 'Offline Ready', dot: 'bg-[#60a5fa]', text: 'text-sky-300' }
         : { label: 'Offline Mode', dot: 'bg-amber-400', text: 'text-amber-300' };
     }
-    if (connStatus.state === 'CONNECTED' && connStatus.geminiConfigured === false) {
-      return { label: 'Server Key Missing', dot: 'bg-amber-400', text: 'text-amber-300' };
+    if (!routerStatus.networkOnline) {
+      return routerStatus.localReady
+        ? { label: 'Offline Ready', dot: 'bg-[#60a5fa]', text: 'text-sky-300' }
+        : { label: 'Server Unavailable', dot: 'bg-rose-400', text: 'text-rose-300' };
     }
-    if (connStatus.state === 'CONNECTED') {
-      return { label: 'Gemini Connected', dot: 'bg-emerald-400', text: 'text-emerald-300' };
+    if (connStatus.state === 'CONNECTING') {
+      return { label: 'Connecting', dot: 'bg-amber-400', text: 'text-amber-300' };
     }
-    return { label: 'Server Gemini Ready', dot: 'bg-teal-400', text: 'text-teal-300' };
+    if (isCloudVerifiedReady) {
+      return { label: 'Gemini Ready', dot: 'bg-emerald-400', text: 'text-emerald-300' };
+    }
+    return { label: 'Server Unavailable', dot: 'bg-rose-400', text: 'text-rose-300' };
   })();
 
-  const connMeta = STATE_LABELS[connStatus.state];
+  const connMeta =
+    connStatus.state === 'CONNECTED' && connStatus.geminiConfigured === false
+      ? { label: 'Server Unavailable', dot: 'bg-amber-400', text: 'text-amber-300' }
+      : STATE_LABELS[connStatus.state];
   const activeVoiceProfile = voiceProfileManager.getActiveProfile();
 
   const SectionShell: React.FC<{
@@ -486,9 +451,11 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
         icon={<Sparkles className="w-4 h-4 text-emerald-400" />}
         title="Gemini AI & Model Configuration (Server-Side)"
         summary={`${selectedModel} · ${
-          connStatus.geminiConfigured === false
-            ? 'Server secret pending'
-            : 'Interactions API & Live API Active'
+          isCloudVerifiedReady
+            ? 'Gemini Ready'
+            : connStatus.state === 'CONNECTING'
+            ? 'Connecting'
+            : 'Server Unavailable'
         }`}
       >
         <div className="p-3.5 rounded-xl bg-[#070d14]/90 border border-emerald-500/25 space-y-2 text-xs">
@@ -586,115 +553,53 @@ export const SystemHealthDashboard: React.FC<SystemHealthDashboardProps> = ({
         <OfflineModelStore />
       </SectionShell>
 
-      {/* 3. Server Gateway Configuration (Web uses /api automatically; Android APK can specify custom server) */}
+      {/* 3. Read-Only Cloud Service Status (Zero manual URL or token fields for users) */}
       <SectionShell
         id="backend"
         icon={<Server className="w-4 h-4 text-[#60a5fa]" />}
-        title="BUDDY Server Gateway"
-        summary={
-          connStatus.effectiveUrl
-            ? `Server: ${connStatus.effectiveUrl}`
-            : 'Built-in /api server active for Gemini & Studio'
-        }
+        title="Cloud Service Status"
+        summary={`${connMeta.label}${health?.uptimeSeconds ? ` · Uptime ${health.uptimeSeconds}s` : ''}`}
       >
-        <div className="p-3 rounded-xl bg-[#070d14] border border-slate-800 space-y-1.5 text-xs">
+        <div className="p-3 rounded-xl bg-[#070d14] border border-slate-800 space-y-2 text-xs">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-400">Server Status</span>
+            <span className="text-slate-400">Cloud Gemini Status</span>
             <span className={`font-semibold inline-flex items-center gap-1.5 ${connMeta.text}`}>
               <span className={`w-2 h-2 rounded-full ${connMeta.dot}`} />
               <span>{connMeta.label}</span>
             </span>
           </div>
-          <p className="text-[11px] text-slate-400 leading-relaxed">
-            Web runtime automatically routes Gemini Interactions API &amp; Live API calls through <code className="text-slate-300 font-mono">/api/*</code>. For standalone mobile APKs, specify your HTTPS server URL below.
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-slate-400">On-Device Offline AI</span>
+            <span className={routerStatus.localReady ? 'text-sky-300 font-medium' : 'text-slate-400'}>
+              {routerStatus.localReady ? 'Offline Ready' : `${downloadedCount} model(s) downloaded`}
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-400 leading-relaxed pt-1 border-t border-slate-800/80">
+            BUDDY connects automatically to its managed cloud service whenever online access is available. No manual server URL or token entry is required.
           </p>
         </div>
 
-        {connStatus.isPreviewUrl && (
-          <div className="p-3 rounded-xl bg-amber-950/35 border border-amber-500/30 text-xs text-amber-100 space-y-1">
-            <div className="flex items-center gap-1.5 font-medium text-[#d4a84f]">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-              <span>AI Studio Preview URL Detected</span>
-            </div>
-            <p className="text-slate-300 text-[11px] leading-relaxed">
-              AI Studio preview hosts enforce browser cookie checks and do not accept mobile APK requests. Clear this URL unless you deploy an independent HTTPS server.
-            </p>
+        {connStatus.lastError && !isCloudVerifiedReady && (
+          <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-500/30 text-xs text-rose-200 leading-relaxed">
+            {connStatus.lastError}
           </div>
         )}
 
-        <div className="space-y-1.5">
-          <label className="text-xs text-slate-300 block">Optional Backend HTTPS Service Root URL</label>
-          <input
-            type="url"
-            value={backendUrl}
-            onChange={(e) => setBackendUrl(e.target.value)}
-            placeholder="https://your-optional-server.example.com"
-            className="w-full min-h-[42px] px-3 py-2 bg-[#070d14] border border-slate-800 rounded-xl text-xs font-mono text-slate-100 placeholder-slate-600 focus:outline-none focus:border-[#60a5fa]"
-          />
-        </div>
+        <button
+          type="button"
+          onClick={handleTestConnection}
+          disabled={isTestingConnection}
+          className="w-full min-h-[40px] px-3 py-2 bg-[#070d14] hover:bg-slate-800 border border-emerald-500/30 text-emerald-300 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isTestingConnection ? 'animate-spin' : ''}`} />
+          <span>{isTestingConnection ? 'Connecting...' : 'Retry Connection'}</span>
+        </button>
 
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <label className="text-xs text-slate-300 flex items-center gap-1.5">
-              <KeyRound className="w-3.5 h-3.5 text-slate-400" />
-              <span>Optional Server Access Token</span>
-            </label>
-            <button
-              type="button"
-              onClick={() => setShowToken((v) => !v)}
-              className="text-xs text-[#60a5fa] hover:underline"
-            >
-              {showToken ? 'Hide' : 'Show'}
-            </button>
+        {import.meta.env.DEV && (
+          <div className="p-2.5 rounded-xl bg-[#070d14]/60 border border-slate-800/70 text-[11px] text-slate-400 font-mono">
+            DEV Runtime · Endpoint: {connStatus.effectiveUrl || 'same-origin /api'}
           </div>
-          <input
-            type={showToken ? 'text' : 'password'}
-            value={apiTokenInput}
-            onChange={(e) => setApiTokenInput(e.target.value)}
-            placeholder="Optional BUDDY_API_TOKEN"
-            className="w-full min-h-[42px] px-3 py-2 bg-[#070d14] border border-slate-800 rounded-xl text-xs font-mono text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-400"
-          />
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <button
-            type="button"
-            onClick={handleSaveUrlOnly}
-            className="min-h-[40px] px-3 py-2 bg-[#070d14] hover:bg-slate-800 border border-slate-700 text-slate-200 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5"
-          >
-            <Save className="w-3.5 h-3.5" />
-            <span>Save</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleTestConnection}
-            disabled={isTestingConnection}
-            className="min-h-[40px] px-3 py-2 bg-[#070d14] hover:bg-slate-800 border border-slate-700 text-[#60a5fa] rounded-xl text-xs font-medium flex items-center justify-center gap-1.5"
-          >
-            <Wifi className="w-3.5 h-3.5" />
-            <span>Test</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleSaveAndTest}
-            disabled={isTestingConnection}
-            className="min-h-[40px] px-3 py-2 bg-[#60a5fa] hover:bg-blue-400 text-slate-950 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isTestingConnection ? 'animate-spin' : ''}`} />
-            <span>Save &amp; Test</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleResetGateway}
-            className="min-h-[40px] px-3 py-2 bg-[#070d14] hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Clear</span>
-          </button>
-        </div>
+        )}
 
         {gatewayNotice && (
           <div

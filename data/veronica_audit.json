@@ -1,5 +1,35 @@
 [
   {
+    "id": "audit_1795513022258",
+    "namespace": "03872f3814dd133275c61935",
+    "timestamp": "2026-11-24T09:37:02.258Z",
+    "action": "Security Auth Granted: app_settings",
+    "riskLevel": "MEDIUM",
+    "status": "AUTHORIZED",
+    "details": "Authorized via DEVICE_SECURITY_PIN_VALIDATION. Token issued.",
+    "actor": "SURYA_SECURITY"
+  },
+  {
+    "id": "audit_1795512955346",
+    "namespace": "03872f3814dd133275c61935",
+    "timestamp": "2026-11-24T09:35:55.346Z",
+    "action": "Security Auth Granted: app_settings",
+    "riskLevel": "MEDIUM",
+    "status": "AUTHORIZED",
+    "details": "Authorized via DEVICE_SECURITY_PIN_VALIDATION. Token issued.",
+    "actor": "SURYA_SECURITY"
+  },
+  {
+    "id": "audit_1795512916291",
+    "namespace": "03872f3814dd133275c61935",
+    "timestamp": "2026-11-24T09:35:16.291Z",
+    "action": "Security Auth Granted: app_settings",
+    "riskLevel": "MEDIUM",
+    "status": "AUTHORIZED",
+    "details": "Authorized via DEVICE_SECURITY_PIN_VALIDATION. Token issued.",
+    "actor": "SURYA_SECURITY"
+  },
+  {
     "id": "audit_1795511831658",
     "namespace": "03872f3814dd133275c61935",
     "timestamp": "2026-11-24T09:17:11.658Z",

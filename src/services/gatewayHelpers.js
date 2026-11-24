@@ -6,6 +6,7 @@
 export const STORAGE_KEY_BACKEND_URL = 'surya_backend_url';
 export const STORAGE_KEY_API_TOKEN = 'surya_api_token';
 export const STORAGE_KEY_CLIENT_ID = 'surya_client_id';
+export const STORAGE_KEY_CLIENT_SESSION = 'buddy_client_session_v1';
 export const GEMINI_API_KEY_URL = 'https://aistudio.google.com/app/apikey';
 
 export class GatewayHttpError extends Error {
@@ -242,7 +243,7 @@ export function classifyResponseFailure({ url, status, contentType = '', bodyTex
 
   if (isCookieRedirect || String(bodyText).includes('__cookie_check') || String(bodyText).includes('Cookie check')) {
     return new GatewayHttpError(
-      `BUDDY Backend Error: Gateway at ${url} redirected to a browser cookie challenge (HTTP ${status || 302}). AI Studio preview URLs block Android APK requests; configure an independent Cloud Run HTTPS URL in Backend Server Gateway settings.`,
+      `BUDDY cloud gateway is temporarily unavailable (HTTP ${status || 302} security redirect). Use On-Device Offline AI or try again later.`,
       {
         code: 'COOKIE_GATEWAY_HTML',
         status: status || 302,
@@ -255,7 +256,7 @@ export function classifyResponseFailure({ url, status, contentType = '', bodyTex
 
   if (looksLikeHtmlPayload(bodyText, contentType)) {
     return new GatewayHttpError(
-      `BUDDY Backend Error: Received HTML webpage instead of JSON API from ${url} (HTTP ${status}). Verify the configured backend URL points to the live BUDDY Express server.`,
+      `BUDDY cloud service returned an unexpected page (HTTP ${status}). Cloud features are temporarily unavailable.`,
       {
         code: 'HTML_RESPONSE',
         status,
@@ -317,7 +318,7 @@ export function classifyResponseFailure({ url, status, contentType = '', bodyTex
     return new GatewayHttpError(
       serverMsg
         ? `${serverMsg} (HTTP ${status})`
-        : `Backend authentication failed (HTTP ${status}). Verify your BUDDY API access token or origin policy in Backend Server Gateway settings.`,
+        : `Cloud request could not be authorized (HTTP ${status}). Please retry shortly or use Offline Mode.`,
       {
         code: 'AUTH_REQUIRED',
         status,
@@ -345,7 +346,7 @@ export function classifyResponseFailure({ url, status, contentType = '', bodyTex
 
   if (status === 404) {
     return new GatewayHttpError(
-      serverMsg || `Endpoint not found (HTTP 404) at ${url}. Confirm your backend URL targets the BUDDY Express service root.`,
+      serverMsg || `Cloud AI endpoint is temporarily unavailable (HTTP 404).`,
       {
         code: 'NOT_FOUND',
         status: 404,
@@ -382,7 +383,7 @@ export function classifyNetworkException(err, url, { timedOut = false, userAbort
 
   if (timedOut || err?.name === 'TimeoutError') {
     return new GatewayHttpError(
-      `Request timed out contacting ${url}. Check network strength or server responsiveness.`,
+      `Cloud request timed out. Check your internet connection or try again shortly.`,
       {
         code: 'TIMEOUT',
         status: null,
@@ -393,9 +394,8 @@ export function classifyNetworkException(err, url, { timedOut = false, userAbort
     );
   }
 
-  const detail = err?.message || 'Failed to fetch';
   return new GatewayHttpError(
-    `Server unavailable at ${url}: ${detail}. Verify internet access, HTTPS endpoint, or update your Backend Server Gateway settings.`,
+    `Server unavailable. Check your internet connection or use On-Device Offline AI.`,
     {
       code: 'NETWORK_ERROR',
       status: null,

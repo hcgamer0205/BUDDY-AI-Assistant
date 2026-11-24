@@ -1,6 +1,7 @@
 export const STORAGE_KEY_BACKEND_URL: string;
 export const STORAGE_KEY_API_TOKEN: string;
 export const STORAGE_KEY_CLIENT_ID: string;
+export const STORAGE_KEY_CLIENT_SESSION: string;
 export const GEMINI_API_KEY_URL: string;
 
 export type GatewayErrorCode =

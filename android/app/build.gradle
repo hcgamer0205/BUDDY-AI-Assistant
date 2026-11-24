@@ -51,6 +51,7 @@ android {
     }
 
     lint {
+        abortOnError true
         textReport true
     }
 }

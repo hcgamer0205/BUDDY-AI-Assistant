@@ -57,7 +57,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, X-Surya-Client-Id, X-Request-Id');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, X-Surya-Client-Id, X-Buddy-Session, X-Request-Id');
 
   if (req.method === 'OPTIONS') {
     if (origin && !isAllowedOrigin(origin)) {
@@ -574,6 +574,17 @@ export function sanitizeContent(input: string): string {
   for (const pattern of SENSITIVE_PATTERNS) {
     sanitized = sanitized.replace(pattern, '[REDACTED_SECRET]');
   }
+  const secretValues = [
+    process.env.GEMINI_API_KEY,
+    process.env.SURYA_API_TOKEN,
+    process.env.VERONICA_SECRET,
+    process.env.VERONICA_OPERATOR_PIN,
+  ];
+  for (const secret of secretValues) {
+    if (secret && secret.trim().length >= 6) {
+      sanitized = sanitized.split(secret.trim()).join('[REDACTED_SECRET]');
+    }
+  }
   return sanitized;
 }
 
@@ -681,15 +692,93 @@ function persistUserMemoryStores() {
   }
 }
 
+const VERONICA_SECRET_FILE = path.join(DATA_DIR, '.veronica_hmac');
+function loadOrCreateHmacSecret(): string {
+  const fromEnv = (process.env.VERONICA_SECRET || '').trim();
+  if (fromEnv) return fromEnv;
+  try {
+    if (fs.existsSync(VERONICA_SECRET_FILE)) {
+      const saved = fs.readFileSync(VERONICA_SECRET_FILE, 'utf-8').trim();
+      if (saved.length >= 32) return saved;
+    }
+    const generated = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(VERONICA_SECRET_FILE, generated, { encoding: 'utf-8', mode: 0o600 });
+    return generated;
+  } catch {
+    return crypto.randomBytes(32).toString('hex');
+  }
+}
+
+const VERONICA_SECRET_HMAC = loadOrCreateHmacSecret();
+
+const CLIENT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function createSignedClientSession(clientId?: string): {
+  sessionToken: string;
+  clientId: string;
+  expiresAt: number;
+} {
+  const cleanId =
+    typeof clientId === 'string' && /^[a-zA-Z0-9._:-]{8,80}$/.test(clientId.trim())
+      ? clientId.trim()
+      : `buddy_${crypto.randomUUID()}`;
+  const expiresAt = Date.now() + CLIENT_SESSION_TTL_MS;
+  const payload = `${cleanId}.${expiresAt}`;
+  const sig = crypto.createHmac('sha256', VERONICA_SECRET_HMAC).update(payload).digest('hex');
+  return {
+    sessionToken: `${payload}.${sig}`,
+    clientId: cleanId,
+    expiresAt,
+  };
+}
+
+export function verifySignedClientSession(token: string): { valid: boolean; clientId?: string; reason?: string } {
+  if (!token || typeof token !== 'string') {
+    return { valid: false, reason: 'missing_session' };
+  }
+  const parts = token.trim().split('.');
+  if (parts.length !== 3) {
+    return { valid: false, reason: 'malformed_session' };
+  }
+  const [clientId, expStr, sig] = parts;
+  if (!/^[a-zA-Z0-9._:-]{8,80}$/.test(clientId) || !/^\d+$/.test(expStr) || !/^[a-f0-9]{64}$/i.test(sig)) {
+    return { valid: false, reason: 'malformed_session' };
+  }
+  const expiresAt = Number(expStr);
+  if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+    return { valid: false, reason: 'expired_session' };
+  }
+  const expectedSig = crypto
+    .createHmac('sha256', VERONICA_SECRET_HMAC)
+    .update(`${clientId}.${expStr}`)
+    .digest('hex');
+  const expectedBuf = Buffer.from(expectedSig, 'hex');
+  const providedBuf = Buffer.from(sig, 'hex');
+  if (expectedBuf.length !== providedBuf.length || !crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+    return { valid: false, reason: 'invalid_signature' };
+  }
+  return { valid: true, clientId };
+}
+
 export function getUserNamespace(req: Request): string {
+  const sessionHeader = req.headers['x-buddy-session'];
+  if (typeof sessionHeader === 'string' && sessionHeader.trim()) {
+    const verified = verifySignedClientSession(sessionHeader.trim());
+    if (verified.valid && verified.clientId) {
+      return crypto.createHash('sha256').update(`session:${verified.clientId}`).digest('hex').slice(0, 24);
+    }
+  }
   const clientHeader = req.headers['x-surya-client-id'];
   const authHeader = req.headers.authorization;
-  const rawIdentity =
-    typeof clientHeader === 'string' && clientHeader.trim()
-      ? `client:${clientHeader.trim()}`
-      : typeof authHeader === 'string' && authHeader.trim()
-      ? `auth:${authHeader.trim()}`
-      : 'default_local';
+  const safeClientId =
+    typeof clientHeader === 'string' && /^[a-zA-Z0-9._:-]{3,80}$/.test(clientHeader.trim())
+      ? clientHeader.trim()
+      : '';
+  const rawIdentity = safeClientId
+    ? `client:${safeClientId}`
+    : typeof authHeader === 'string' && authHeader.trim()
+    ? `auth:${authHeader.trim()}`
+    : 'default_local';
   return crypto.createHash('sha256').update(rawIdentity).digest('hex').slice(0, 24);
 }
 
@@ -745,7 +834,6 @@ interface VeronicaChallenge {
 }
 
 const veronicaChallenges = new Map<string, VeronicaChallenge>();
-const VERONICA_SECRET_HMAC = process.env.VERONICA_SECRET || crypto.randomBytes(32).toString('hex');
 
 interface LiveTicket {
   ticket: string;
@@ -899,10 +987,30 @@ const SCIENTIFIC_DATABASE = [
 
 /* ---------------- API ROUTES ---------------- */
 
-// Apply optional API authentication to sensitive routes (GET /api/health & /api/ready remain public)
+// Reject tampered X-Buddy-Session tokens across all API routes
 app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  const sessionHeader = req.headers['x-buddy-session'];
+  if (typeof sessionHeader === 'string' && sessionHeader.trim() && req.path !== '/session') {
+    const check = verifySignedClientSession(sessionHeader.trim());
+    if (!check.valid) {
+      return res.status(401).json({
+        error: 'Client session expired or invalid. Please refresh your session.',
+        code: 'INVALID_SESSION',
+      });
+    }
+  }
   if (req.path === '/health' || req.path === '/ready') return next();
   return requireApiAuth(req, res, next);
+});
+
+app.post('/api/session', veronicaLimiter, (req: Request, res: Response) => {
+  const requestedId = typeof req.body?.clientId === 'string'
+    ? req.body.clientId
+    : typeof req.headers['x-surya-client-id'] === 'string'
+    ? req.headers['x-surya-client-id']
+    : undefined;
+  const session = createSignedClientSession(requestedId);
+  return res.json(session);
 });
 
 app.get('/api/ready', (req: Request, res: Response) => {
@@ -914,7 +1022,7 @@ app.get('/api/ready', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/live/ticket', (req: Request, res: Response) => {
+app.post('/api/live/ticket', veronicaLimiter, (req: Request, res: Response) => {
   const ns = getUserNamespace(req);
   const expiresAt = Date.now() + 60 * 1000;
   const nonce = crypto.randomBytes(16).toString('hex');
@@ -2314,11 +2422,18 @@ app.get('/api/plugins', (req: Request, res: Response) => {
 
 app.post('/api/plugins/install', (req: Request, res: Response) => {
   const { pluginId, config = {} } = req.body;
+  if (!pluginId || typeof pluginId !== 'string') {
+    return res.status(400).json({ error: 'Valid pluginId is required.' });
+  }
   const plugin = pluginCatalog.find((p) => p.id === pluginId);
   if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
 
+  const safeConfig =
+    config && typeof config === 'object' && !Array.isArray(config)
+      ? config
+      : {};
   plugin.status = 'active';
-  plugin.config = { ...plugin.config, ...config };
+  plugin.config = { ...plugin.config, ...safeConfig };
   persistPlugins();
 
   return res.json({ success: true, plugin, message: `${plugin.name} installed and active.` });
@@ -2326,6 +2441,9 @@ app.post('/api/plugins/install', (req: Request, res: Response) => {
 
 app.post('/api/plugins/toggle', (req: Request, res: Response) => {
   const { pluginId, enabled } = req.body;
+  if (!pluginId || typeof pluginId !== 'string' || typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'Valid pluginId and boolean enabled flag are required.' });
+  }
   const plugin = pluginCatalog.find((p) => p.id === pluginId);
   if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
 
@@ -2405,17 +2523,21 @@ app.get('/api/skills', (req: Request, res: Response) => {
 
 app.post('/api/skills', (req: Request, res: Response) => {
   const { name, description, category = 'General', triggerKeywords = [], instructions } = req.body;
-  if (!name || !instructions) {
+  if (!name || typeof name !== 'string' || !name.trim() || !instructions || typeof instructions !== 'string' || !instructions.trim()) {
     return res.status(400).json({ error: 'Skill name and instructions are required.' });
   }
 
+  const safeKeywords = Array.isArray(triggerKeywords)
+    ? triggerKeywords.filter((k) => typeof k === 'string' && k.trim()).slice(0, 20).map((k: string) => sanitizeContent(k.trim().slice(0, 60)))
+    : [];
+
   const newSkill: SkillRecord = {
     id: `skill_${Date.now()}`,
-    name: sanitizeContent(name),
-    description: sanitizeContent(description || ''),
-    category: sanitizeContent(category),
-    triggerKeywords: triggerKeywords.map((k: string) => sanitizeContent(k)),
-    instructions: sanitizeContent(instructions),
+    name: sanitizeContent(name.trim().slice(0, 120)),
+    description: sanitizeContent(typeof description === 'string' ? description.trim().slice(0, 500) : ''),
+    category: sanitizeContent(typeof category === 'string' && category.trim() ? category.trim().slice(0, 60) : 'General'),
+    triggerKeywords: safeKeywords,
+    instructions: sanitizeContent(instructions.trim().slice(0, 4000)),
     tools: ['gemini_reasoning'],
     isEnabled: true,
     createdAt: new Date().toISOString(),
@@ -2429,7 +2551,11 @@ app.post('/api/skills', (req: Request, res: Response) => {
 
 app.delete('/api/skills/:id', (req: Request, res: Response) => {
   const { id } = req.params;
+  const before = skillsCatalog.length;
   skillsCatalog = skillsCatalog.filter((s) => s.id !== id);
+  if (skillsCatalog.length === before) {
+    return res.status(404).json({ error: 'Skill not found.' });
+  }
   persistSkills();
   return res.json({ success: true, remaining: skillsCatalog.length });
 });

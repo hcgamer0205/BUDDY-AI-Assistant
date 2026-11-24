@@ -240,7 +240,7 @@ export const MoreWorkspace: React.FC<MoreWorkspaceProps> = ({
           <ItemRow
             icon={<Settings className="w-4 h-4 text-emerald-300" />}
             title="System Settings"
-            subtitle="Backend & Gemini, Permissions, Security, Device Info"
+            subtitle="Cloud Gemini, Offline AI, Permissions, Security"
             onClick={() => onOpenSystemSection('health')}
           />
         </div>

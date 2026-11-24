@@ -169,9 +169,13 @@ test('3. GitHub Actions Android APK Pipeline Verification', () => {
   const content = fs.readFileSync(workflowPath, 'utf-8');
   assert.ok(content.includes("java-version: '21'"), 'Workflow must use Java 21');
   assert.ok(content.includes('api-level: 36'), 'Workflow must target Android SDK 36');
-  assert.ok(content.includes('gradle-version 8.11.1'), 'Workflow must specify Gradle 8.11.1');
+  assert.ok(content.includes('gradle-version 8.11.1') || content.includes("gradle-version: '8.11.1'"), 'Workflow must specify Gradle 8.11.1');
   assert.ok(content.includes('VITE_API_BASE_URL'), 'Workflow must inject VITE_API_BASE_URL into production web build');
-  assert.ok(content.includes('Surya-Android.apk'), 'Artifact must be Surya-Android.apk');
+  assert.ok(content.includes('ais-dev-|ais-pre-'), 'Workflow must reject AI Studio preview URLs in VITE_API_BASE_URL');
+  assert.ok(content.includes('apksigner'), 'Workflow must verify signed release APK with apksigner');
+  assert.ok(content.includes('Surya-Android.apk'), 'Release artifact must be Surya-Android.apk');
+  assert.ok(content.includes('BUDDY-Debug-APK'), 'Workflow must upload separate BUDDY-Debug-APK artifact');
+  assert.ok(content.includes('BUDDY-Android-Reports'), 'Workflow must upload Android lint/build report artifact');
   assert.doesNotMatch(content, /^\s*if:\s*.*\bsecrets\./m, 'Workflow must never reference secrets context inside an if: condition');
   for (const secretName of ['BUDDY_KEYSTORE_BASE64', 'BUDDY_KEYSTORE_PASSWORD', 'BUDDY_KEY_ALIAS', 'BUDDY_KEY_PASSWORD']) {
     assert.ok(content.includes(secretName), `Workflow must check signing secret ${secretName}`);
@@ -2134,8 +2138,148 @@ test('40. Android Release Config, ProGuard Keep Rules, Dockerfile Non-Root & Doc
   assert.ok(fs.existsSync(path.resolve('docs/PRODUCTION_RELEASE.md')), 'Production release doc must exist');
 });
 
+// 41. Public Zero-Config Client & Honest Connection Status UI Audit
+test('41. Public Zero-Config Client, No Manual URL/Token Prompts & Honest Status Gating', () => {
+  const sysDash = fs.readFileSync(path.resolve('src/components/SystemHealthDashboard.tsx'), 'utf8');
+  const homeUi = fs.readFileSync(path.resolve('src/components/SuryaCommandCenter.tsx'), 'utf8');
+  const chatUi = fs.readFileSync(path.resolve('src/components/StarkCommandCenter.tsx'), 'utf8');
+  const appSrc = fs.readFileSync(path.resolve('src/App.tsx'), 'utf8');
+  const apiSvc = fs.readFileSync(path.resolve('src/services/apiService.ts'), 'utf8');
+  const gatewayHelpers = fs.readFileSync(path.resolve('src/services/gatewayHelpers.js'), 'utf8');
 
+  // Ordinary UI must NEVER show manual backend URL/token prompts or standby/misleading Gemini labels
+  for (const [label, src] of [
+    ['SystemHealthDashboard.tsx', sysDash],
+    ['SuryaCommandCenter.tsx', homeUi],
+    ['StarkCommandCenter.tsx', chatUi],
+    ['App.tsx', appSrc],
+    ['gatewayHelpers.js', gatewayHelpers],
+  ]) {
+    assert.doesNotMatch(
+      src,
+      /BUDDY Server Gateway|Backend Server Gateway|Optional Backend HTTPS Service Root URL|Optional Server Access Token|Server status:\s*Standby|Server Gemini Ready|BUDDY backend URL is not configured for this Android APK/i,
+      `${label} must not expose manual backend configuration prompts or Standby/misleading status`
+    );
+  }
 
+  // Never bundle VITE_SURYA_API_TOKEN into client bundles
+  assert.doesNotMatch(apiSvc, /VITE_SURYA_API_TOKEN/, 'apiService.ts must never embed VITE_SURYA_API_TOKEN');
+  assert.ok(apiSvc.includes('X-Buddy-Session'), 'apiService.ts must attach server-signed X-Buddy-Session');
 
+  // Verify read-only Cloud Service Status & honest Retry button
+  assert.ok(sysDash.includes('Cloud Service Status'), 'Settings must display read-only Cloud Service Status');
+  assert.ok(sysDash.includes('Retry Connection'), 'Settings must allow retrying cloud connection');
+  assert.ok(sysDash.includes('Server Unavailable'), 'Settings must report Server Unavailable when unconfigured/unreachable');
 
+  // Verify Gemini Ready in App.tsx and SystemHealthDashboard.tsx is gated on verified backend + geminiConfigured
+  assert.ok(
+    appSrc.includes("connStatus.state === 'CONNECTED' && connStatus.geminiConfigured === true"),
+    'App.tsx must only show Gemini Ready when backend is connected AND geminiConfigured === true'
+  );
+  assert.ok(
+    sysDash.includes("connStatus.state === 'CONNECTED' && connStatus.geminiConfigured === true"),
+    'SystemHealthDashboard.tsx must only show Gemini Ready when backend is connected AND geminiConfigured === true'
+  );
+  assert.ok(chatUi.includes('Offline Ready'), 'Chat UI must distinguish Offline Ready status');
+});
 
+// 42. Server-Signed X-Buddy-Session Isolation, Secret Redaction & Strict Input Validation
+test('42. Server-Signed X-Buddy-Session Isolation, Secret Redaction & Input Validation', async () => {
+  // Check sanitizeContent redacts configured env secrets
+  const tsxBin = path.resolve('node_modules/.bin/tsx');
+  const redactionOut = execFileSync(
+    tsxBin,
+    [
+      '-e',
+      `import('./server.ts').then((m) => {
+        const clean = m.sanitizeContent('debug leak GEMINI=AIzaSySecret1234567890ABCD TOKEN=my-super-secret-token-value');
+        console.log(JSON.stringify({ clean }));
+      });`,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        SURYA_SKIP_LISTEN: '1',
+        SURYA_SKIP_VITE: '1',
+        GEMINI_API_KEY: 'AIzaSySecret1234567890ABCD',
+        SURYA_API_TOKEN: 'my-super-secret-token-value',
+      },
+      encoding: 'utf8',
+    }
+  );
+  const { clean } = JSON.parse(redactionOut.trim().split('\n').pop());
+  assert.ok(!clean.includes('AIzaSySecret1234567890ABCD'), 'sanitizeContent must redact GEMINI_API_KEY');
+  assert.ok(!clean.includes('my-super-secret-token-value'), 'sanitizeContent must redact SURYA_API_TOKEN');
+
+  const srv = await startIsolatedBackend({
+    GEMINI_API_KEY: '',
+    VERONICA_SECRET: 'test-hmac-session-secret-001',
+  });
+  try {
+    // 1. Issue two signed client sessions via POST /api/session
+    const s1Res = await fetch(`${srv.baseUrl}/api/session`, { method: 'POST' });
+    assert.strictEqual(s1Res.status, 200);
+    const s1 = await s1Res.json();
+    assert.ok(s1.sessionToken && s1.clientId && s1.expiresAt > Date.now());
+
+    const s2Res = await fetch(`${srv.baseUrl}/api/session`, { method: 'POST' });
+    assert.strictEqual(s2Res.status, 200);
+    const s2 = await s2Res.json();
+    assert.notStrictEqual(s1.clientId, s2.clientId);
+
+    // 2. Tampered X-Buddy-Session must be rejected with 401 INVALID_SESSION
+    const tamperedRes = await fetch(`${srv.baseUrl}/api/memory`, {
+      headers: { 'X-Buddy-Session': `${s1.clientId}.${s1.expiresAt}.${'f'.repeat(64)}` },
+    });
+    assert.strictEqual(tamperedRes.status, 401);
+    const tamperedJson = await tamperedRes.json();
+    assert.strictEqual(tamperedJson.code, 'INVALID_SESSION');
+
+    // 3. Per-user isolation via verified X-Buddy-Session
+    const memKey = `session_iso_${Date.now()}`;
+    const createRes = await fetch(`${srv.baseUrl}/api/memory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Buddy-Session': s1.sessionToken },
+      body: JSON.stringify({ key: memKey, value: 'Session One Private Note', category: 'fact' }),
+    });
+    assert.strictEqual(createRes.status, 200);
+    const createdBody = await createRes.json();
+    const memId = createdBody.created?.id;
+    assert.ok(memId);
+
+    const listOther = await fetch(`${srv.baseUrl}/api/memory`, {
+      headers: { 'X-Buddy-Session': s2.sessionToken },
+    });
+    assert.strictEqual(listOther.status, 200);
+    const otherJson = await listOther.json();
+    assert.strictEqual(
+      otherJson.memories.some((m) => m.key === memKey),
+      false,
+      'Verified session B must not access verified session A memory entries'
+    );
+
+    // Clean up memory item
+    await fetch(`${srv.baseUrl}/api/memory/${encodeURIComponent(memId)}`, {
+      method: 'DELETE',
+      headers: { 'X-Buddy-Session': s1.sessionToken },
+    });
+
+    // 4. Malformed plugin/skill inputs return 400
+    const badPlugin = await fetch(`${srv.baseUrl}/api/plugins/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Buddy-Session': s1.sessionToken },
+      body: JSON.stringify({ name: '', permissions: 'not-an-array' }),
+    });
+    assert.strictEqual(badPlugin.status, 400);
+
+    const badSkill = await fetch(`${srv.baseUrl}/api/skills`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Buddy-Session': s1.sessionToken },
+      body: JSON.stringify({ name: 'Incomplete Skill' }),
+    });
+    assert.strictEqual(badSkill.status, 400);
+  } finally {
+    await srv.stop();
+  }
+});

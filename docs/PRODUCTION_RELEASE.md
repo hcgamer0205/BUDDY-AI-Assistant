@@ -20,18 +20,19 @@
 
 - **Web & Server (`server.ts`)**
   - Strict CORS origin allowlist (`APP_URL`, `ALLOWED_ORIGINS`, Capacitor `https://localhost`, `capacitor://localhost`).
+  - Server-issued HMAC-signed client session tokens (`POST /api/session`, `X-Buddy-Session`) isolating per-user Memory, Studio apps, Interactions state, and Veronica challenges without shipping shared admin tokens in the APK.
   - `POST /api/live/ticket` + `WSS /api/live` `verifyClient` origin validation, single-use ticket consumption, `256 KiB` max payload, and 80 frames/s rate cap.
-  - Per-user namespace isolation across Memory (`PUT /api/memory/:id`), Studio apps (multi-file bundle export), and Veronica challenges/audit logs.
   - Fail-closed `VERONICA_OPERATOR_PIN` verification using `crypto.timingSafeEqual` (no client-side hardcoded PINs) + authentic `ANDROID_KEYSTORE_BIOMETRIC` / `WEBAUTHN_HARDWARE_BIOMETRIC` verification.
   - Magic-byte / MIME checks & 14 MB limit in `extractImagePayload()` for Vision endpoints; whitespace prompt rejection.
-  - `GET /api/ready` readiness probe alongside `GET /api/health`; non-root `USER node` Docker execution.
+  - `GET /api/ready` readiness probe alongside `GET /api/health` (`Connecting`, `Gemini Ready`, `Server Unavailable`, `Offline Ready`); non-root `USER node` Docker execution.
 - **Studio Preview (`AppCreatorWorkspace.tsx`)**
   - Restrictive `<meta http-equiv="Content-Security-Policy" ... connect-src 'none'; form-action 'none';>` injected into preview iframe.
   - `SURYA_SANDBOX_ERROR` listener validates `ev.source === iframeRef.current?.contentWindow` and per-session nonce.
 - **Android APK (`capacitor.config.ts`, `AndroidManifest.xml`, `build.gradle`, `proguard-rules.pro`)**
+  - Public backend URL injected at build time via `VITE_API_BASE_URL` (validated against `ais-dev-*`/`ais-pre-*` preview hosts and embedded secrets in `.github/workflows/android-apk.yml`); zero manual backend URL or server token forms for users.
   - `cleartext: false`, `allowMixedContent: false`, `webContentsDebuggingEnabled: false`, `android:allowBackup="false"`, `android:usesCleartextTraffic="false"`.
-  - Release build enables R8 (`minifyEnabled true`, `shrinkResources true`) with explicit ProGuard keep rules for `com.surya.assistant.**`, MediaPipe GenAI, ML Kit OCR/Barcode, Capacitor, and Biometrics.
-  - Version bumped to `versionCode 130` (`versionName "1.3.0"`), with environment-driven `signingConfigs.release` (`BUDDY_KEYSTORE_PATH`, `BUDDY_KEYSTORE_PASSWORD`, `BUDDY_KEY_ALIAS`, `BUDDY_KEY_PASSWORD`).
+  - Release build enables R8 (`minifyEnabled true`, `shrinkResources true`) and `abortOnError true` for Android Lint with explicit ProGuard keep rules for `com.surya.assistant.**`, MediaPipe GenAI, ML Kit OCR/Barcode, Capacitor, and Biometrics.
+  - Version `versionCode 130` (`versionName "1.3.0"`), with environment-driven `signingConfigs.release` (`BUDDY_KEYSTORE_PATH`, `BUDDY_KEYSTORE_PASSWORD`, `BUDDY_KEY_ALIAS`, `BUDDY_KEY_PASSWORD`) verified by `apksigner verify`.
 
 ---
 

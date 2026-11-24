@@ -15,6 +15,7 @@ import {
   STORAGE_KEY_BACKEND_URL,
   STORAGE_KEY_API_TOKEN,
   STORAGE_KEY_CLIENT_ID,
+  STORAGE_KEY_CLIENT_SESSION,
   GatewayHttpError,
   GatewayErrorCode,
   ConnectionState,
@@ -138,8 +139,16 @@ export function getEnvBackendUrl(): string {
   }
 }
 
+function isDevRuntime(): boolean {
+  try {
+    return Boolean(import.meta?.env?.DEV);
+  } catch {
+    return false;
+  }
+}
+
 export function getApiBaseUrl(): string {
-  const stored = readStorage(STORAGE_KEY_BACKEND_URL);
+  const stored = isDevRuntime() ? readStorage(STORAGE_KEY_BACKEND_URL) : '';
   const envUrl = getEnvBackendUrl();
   const isNative = detectNativePlatform(typeof window !== 'undefined' ? window : undefined);
   return resolveApiBaseUrl({ storedUrl: stored, envUrl, isNativePlatform: isNative });
@@ -153,14 +162,9 @@ export function isBackendConfigured(): boolean {
 }
 
 export function getApiToken(): string {
-  const stored = readStorage(STORAGE_KEY_API_TOKEN);
-  if (stored) return stored;
-  try {
-    const envToken = import.meta?.env?.VITE_SURYA_API_TOKEN;
-    return typeof envToken === 'string' ? envToken.trim() : '';
-  } catch {
-    return '';
-  }
+  // Never bundle or read shared server admin tokens in public client/APK builds.
+  if (!isDevRuntime()) return '';
+  return readStorage(STORAGE_KEY_API_TOKEN);
 }
 
 export function getMaskedApiToken(): string {
@@ -168,6 +172,91 @@ export function getMaskedApiToken(): string {
   if (!tok) return '';
   if (tok.length <= 8) return '****';
   return `${tok.slice(0, 3)}••••${tok.slice(-3)}`;
+}
+
+interface StoredClientSession {
+  sessionToken: string;
+  clientId: string;
+  expiresAt: number;
+}
+
+let inMemoryClientSession: StoredClientSession | null = null;
+let sessionPromise: Promise<string> | null = null;
+
+function readStoredSession(): StoredClientSession | null {
+  if (inMemoryClientSession && Date.now() < inMemoryClientSession.expiresAt - 60_000) {
+    return inMemoryClientSession;
+  }
+  const raw = readStorage(STORAGE_KEY_CLIENT_SESSION);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed.sessionToken === 'string' &&
+      typeof parsed.clientId === 'string' &&
+      typeof parsed.expiresAt === 'number' &&
+      Date.now() < parsed.expiresAt - 60_000
+    ) {
+      inMemoryClientSession = parsed;
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
+function clearStoredSession(): void {
+  inMemoryClientSession = null;
+  writeStorage(STORAGE_KEY_CLIENT_SESSION, '');
+}
+
+async function ensureClientSession(): Promise<string> {
+  const existing = readStoredSession();
+  if (existing) return existing.sessionToken;
+  if (sessionPromise) return sessionPromise;
+
+  sessionPromise = (async () => {
+    try {
+      const baseUrl = getApiBaseUrl();
+      const isNative = detectNativePlatform(typeof window !== 'undefined' ? window : undefined);
+      if (isNative && !baseUrl) return '';
+      const url = joinApiUrl(baseUrl, '/api/session');
+      const clientId = getOrCreateClientId();
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Surya-Client-Id': clientId,
+      };
+      const devToken = getApiToken();
+      if (devToken) {
+        headers.Authorization = `Bearer ${devToken}`;
+      }
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ clientId }),
+      });
+      if (!res.ok) return '';
+      const data = await res.json();
+      if (data?.sessionToken && data?.clientId && data?.expiresAt) {
+        inMemoryClientSession = {
+          sessionToken: data.sessionToken,
+          clientId: data.clientId,
+          expiresAt: data.expiresAt,
+        };
+        writeStorage(STORAGE_KEY_CLIENT_SESSION, JSON.stringify(inMemoryClientSession));
+        writeStorage(STORAGE_KEY_CLIENT_ID, data.clientId);
+        return data.sessionToken as string;
+      }
+      return '';
+    } catch {
+      return '';
+    } finally {
+      sessionPromise = null;
+    }
+  })();
+
+  return sessionPromise;
 }
 
 // Connection State Machine Store
@@ -181,14 +270,18 @@ function buildInitialSnapshot(): ConnectionStatusSnapshot {
 
   let initialError: string | null = null;
   let initialCode: GatewayErrorCode | null = null;
-  if (preview) {
+  if (!configured) {
+    initialCode = 'UNCONFIGURED';
+    initialError =
+      'BUDDY cloud service is currently unavailable on this build. Check your connection or switch to On-Device Offline AI.';
+  } else if (preview) {
     initialCode = 'COOKIE_GATEWAY_HTML';
     initialError =
-      'Optional server URL points to an AI Studio preview host that enforces browser cookie checks on mobile APKs.';
+      'Cloud service preview host requires browser cookies and is unavailable for standalone mobile requests.';
   }
 
   return {
-    state: 'DISCONNECTED',
+    state: !configured || preview ? 'UNAVAILABLE' : 'CONNECTING',
     effectiveUrl,
     isConfigured: configured,
     isNative,
@@ -313,6 +406,10 @@ function buildRequestHeaders(extraHeaders?: HeadersInit, isJsonBody = false, acc
   if (!headers.has('X-Surya-Client-Id')) {
     headers.set('X-Surya-Client-Id', getOrCreateClientId());
   }
+  const session = readStoredSession();
+  if (session?.sessionToken && !headers.has('X-Buddy-Session')) {
+    headers.set('X-Buddy-Session', session.sessionToken);
+  }
   const token = getApiToken();
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
@@ -331,23 +428,24 @@ function buildEndpointUrl(endpoint: string): { url: string; baseUrl: string } {
 
   if (isNative && !baseUrl) {
     const err = new GatewayHttpError(
-      'BUDDY backend URL is not configured for this Android APK. Open System > Settings > Backend Server Gateway and enter your deployed HTTPS backend URL.',
+      'BUDDY cloud service is currently unavailable on this build. Check your connection or switch to On-Device Offline AI.',
       {
         code: 'UNCONFIGURED',
         status: null,
-        connectionState: 'DISCONNECTED',
+        connectionState: 'UNAVAILABLE',
         retryable: false,
         url: endpoint,
       }
     );
     updateSnapshot({
-      state: 'DISCONNECTED',
+      state: 'UNAVAILABLE',
       effectiveUrl: '',
       isConfigured: false,
       lastCheckedAt: new Date().toISOString(),
       lastHttpStatus: null,
       lastErrorCode: 'UNCONFIGURED',
       lastError: err.message,
+      geminiConfigured: false,
     });
     throw err;
   }
@@ -411,15 +509,19 @@ async function requestJson<T>(
   options: RequestInit & { timeoutMs?: number; maxRetries?: number } = {}
 ): Promise<T> {
   const { url } = buildEndpointUrl(endpoint);
+  if (endpoint !== '/api/health' && endpoint !== '/api/ready' && endpoint !== '/api/session') {
+    await ensureClientSession();
+  }
   const method = (options.method || 'GET').toUpperCase();
   const isIdempotent = method === 'GET' || method === 'HEAD';
   const maxRetries = typeof options.maxRetries === 'number' ? options.maxRetries : isIdempotent ? 2 : 1;
   const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
   const hasJsonBody = typeof options.body === 'string';
-  const headers = buildRequestHeaders(options.headers, hasJsonBody, 'application/json');
+  let headers = buildRequestHeaders(options.headers, hasJsonBody, 'application/json');
 
   let attempt = 0;
   let lastError: GatewayHttpError | null = null;
+  let refreshedSession = false;
 
   while (attempt <= maxRetries) {
     try {
@@ -448,6 +550,13 @@ async function requestJson<T>(
       }
 
       if (!res.ok) {
+        if (res.status === 401 && !refreshedSession && text.includes('INVALID_SESSION')) {
+          refreshedSession = true;
+          clearStoredSession();
+          await ensureClientSession();
+          headers = buildRequestHeaders(options.headers, hasJsonBody, 'application/json');
+          continue;
+        }
         throw classifyResponseFailure({
           url,
           status: res.status,
@@ -537,6 +646,30 @@ async function requestJson<T>(
 }
 
 export async function checkBackendConnection(): Promise<SystemHealthData> {
+  if (!isBackendConfigured()) {
+    const err = new GatewayHttpError(
+      'BUDDY cloud service is currently unavailable on this build. Check your connection or switch to On-Device Offline AI.',
+      {
+        code: 'UNCONFIGURED',
+        status: null,
+        connectionState: 'UNAVAILABLE',
+        retryable: false,
+        url: '/api/health',
+      }
+    );
+    updateSnapshot({
+      state: 'UNAVAILABLE',
+      effectiveUrl: '',
+      isConfigured: false,
+      lastCheckedAt: new Date().toISOString(),
+      lastHttpStatus: null,
+      lastErrorCode: 'UNCONFIGURED',
+      lastError: err.message,
+      geminiConfigured: false,
+    });
+    throw err;
+  }
+
   updateSnapshot({
     state: 'CONNECTING',
     effectiveUrl: getApiBaseUrl(),
@@ -546,11 +679,13 @@ export async function checkBackendConnection(): Promise<SystemHealthData> {
     lastError: null,
   });
 
-  return requestJson<SystemHealthData>('/api/health', {
+  const health = await requestJson<SystemHealthData>('/api/health', {
     method: 'GET',
     timeoutMs: HEALTH_TIMEOUT_MS,
     maxRetries: 1,
   });
+  ensureClientSession().catch(() => {});
+  return health;
 }
 
 export const apiService = {
@@ -626,6 +761,7 @@ export const apiService = {
     timestamp: string;
   }> {
     const { url } = buildEndpointUrl('/api/chat/stream');
+    await ensureClientSession();
     const headers = buildRequestHeaders(undefined, true, 'text/event-stream');
 
     let receivedAnyChunk = false;
@@ -737,12 +873,19 @@ export const apiService = {
           onChunk(accumulatedText);
         } else if (event.type === 'error' || event.error) {
           const errCode: GatewayErrorCode =
-            event.code === 'GEMINI_AUTH_FAILED' || event.code === 'MODEL_UNAVAILABLE'
+            event.code === 'GEMINI_AUTH_FAILED' ||
+            event.code === 'MODEL_UNAVAILABLE' ||
+            event.code === 'RATE_LIMITED'
               ? event.code
               : 'SERVER_ERROR';
           throw new GatewayHttpError(event.error || 'Stream error received from BUDDY engine', {
             code: errCode,
-            connectionState: errCode === 'GEMINI_AUTH_FAILED' ? 'AUTHENTICATION_REQUIRED' : 'SERVER_ERROR',
+            connectionState:
+              errCode === 'GEMINI_AUTH_FAILED'
+                ? 'AUTHENTICATION_REQUIRED'
+                : errCode === 'RATE_LIMITED'
+                ? 'RATE_LIMITED'
+                : 'SERVER_ERROR',
             retryable: false,
             url,
           });

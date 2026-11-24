@@ -54,7 +54,7 @@ const WELCOME_MESSAGE = (): ChatMessage => ({
   id: 'init_1',
   role: 'assistant',
   content:
-    'BUDDY ready. Connected via server-side Gemini Interactions API, with independent On-Device Offline AI always available.',
+    'BUDDY initialized. Cloud Gemini connects automatically when the backend service is online, and On-Device Offline AI works independently anytime.',
   timestamp: new Date().toISOString(),
   model: 'BUDDY Command Core',
 });
@@ -333,8 +333,8 @@ export default function App() {
     const unsubLive = liveApiService.subscribe(setLiveState);
     const unsubRouter = intelligenceRouter.subscribe(setRouterStatus);
 
+    apiService.checkBackendConnection().catch(() => {});
     if (apiService.isBackendConfigured()) {
-      apiService.checkBackendConnection().catch(() => {});
       modelPreferenceService.refreshFromServer().catch(() => {});
     }
 
@@ -460,33 +460,40 @@ export default function App() {
     currentTab === 'system' ||
     currentTab === 'hub';
 
+  const isCloudVerifiedReady =
+    connStatus.state === 'CONNECTED' && connStatus.geminiConfigured === true;
+
   const headerStatusText =
-    routerStatus.activePath === 'on-device-llm'
-      ? `On-device · ${routerStatus.activeLocalModelName}`
-      : routerStatus.mode === 'offline'
-      ? 'Offline mode'
+    routerStatus.mode === 'offline' || routerStatus.activePath === 'on-device-llm'
+      ? routerStatus.localReady
+        ? 'Offline Ready'
+        : 'Offline Mode'
       : !routerStatus.networkOnline
-      ? 'Network offline'
+      ? routerStatus.localReady
+        ? 'Offline Ready'
+        : 'Server Unavailable'
       : liveState.connected
       ? 'Gemini Live Active'
-      : connStatus.state === 'CONNECTED' && connStatus.geminiConfigured !== false
-      ? 'Gemini Connected'
-      : connStatus.state === 'CONNECTED' && connStatus.geminiConfigured === false
-      ? 'Server Online (Key Pending)'
-      : 'Gemini Ready';
+      : connStatus.state === 'CONNECTING'
+      ? 'Connecting'
+      : isCloudVerifiedReady
+      ? 'Gemini Ready'
+      : 'Server Unavailable';
 
   const headerStatusDot =
-    routerStatus.activePath === 'on-device-llm'
+    routerStatus.activePath === 'on-device-llm' || (routerStatus.mode === 'offline' && routerStatus.localReady)
       ? 'bg-[#60a5fa]'
       : routerStatus.mode === 'offline'
       ? 'bg-[#d4a84f]'
       : !routerStatus.networkOnline
-      ? 'bg-slate-500'
-      : liveState.connected || (connStatus.state === 'CONNECTED' && connStatus.geminiConfigured !== false)
+      ? routerStatus.localReady
+        ? 'bg-[#60a5fa]'
+        : 'bg-rose-400'
+      : liveState.connected || isCloudVerifiedReady
       ? 'bg-emerald-400'
-      : connStatus.state === 'CONNECTED'
+      : connStatus.state === 'CONNECTING'
       ? 'bg-amber-400'
-      : 'bg-teal-400';
+      : 'bg-rose-400';
 
   return (
     <div
@@ -610,10 +617,22 @@ export default function App() {
                   : voiceState.isListening
                   ? 'Listening'
                   : routerStatus.activePath === 'on-device-llm'
-                  ? 'On-Device'
+                  ? 'Offline Ready'
                   : routerStatus.mode === 'offline'
-                  ? 'Offline'
-                  : 'Ready'
+                  ? routerStatus.localReady
+                    ? 'Offline Ready'
+                    : 'Offline'
+                  : !routerStatus.networkOnline
+                  ? routerStatus.localReady
+                    ? 'Offline Ready'
+                    : 'Unavailable'
+                  : connStatus.state === 'CONNECTING'
+                  ? 'Connecting'
+                  : isCloudVerifiedReady
+                  ? 'Ready'
+                  : routerStatus.localReady
+                  ? 'Offline Ready'
+                  : 'Unavailable'
               }
               audioLevel={voiceState.audioLevel}
               onCoreTap={() => {
@@ -646,11 +665,6 @@ export default function App() {
               onOpenGeminiSettings={() => {
                 setSystemSubTab('health');
                 setSystemOpenSection('gemini');
-                setCurrentTab('system');
-              }}
-              onOpenBackendSettings={() => {
-                setSystemSubTab('health');
-                setSystemOpenSection('backend');
                 setCurrentTab('system');
               }}
               onOpenVoiceModal={() => setShowVoiceModal(true)}

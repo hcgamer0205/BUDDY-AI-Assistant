@@ -1,4 +1,4 @@
-name: Build SURYA Android Mobile APK
+name: Build BUDDY Android Mobile APK
 
 on:
   push:
@@ -42,6 +42,7 @@ jobs:
           SDK_DIR=$(dirname "$SDKMANAGER")
           echo "$SDK_DIR" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/build-tools/36.0.0" >> $GITHUB_PATH
 
           echo "Accepting licenses..."
           yes | "$SDKMANAGER" --licenses || true
@@ -69,29 +70,72 @@ jobs:
           npm run lint
           npm test
 
-      - name: Build Web Application
+      - name: Check Release Signing Secret Configuration
+        id: signing_check
+        env:
+          HAS_KEYSTORE: ${{ secrets.BUDDY_KEYSTORE_BASE64 != '' }}
+          HAS_KEYSTORE_PASSWORD: ${{ secrets.BUDDY_KEYSTORE_PASSWORD != '' }}
+          HAS_KEY_ALIAS: ${{ secrets.BUDDY_KEY_ALIAS != '' }}
+          HAS_KEY_PASSWORD: ${{ secrets.BUDDY_KEY_PASSWORD != '' }}
+        run: |
+          if [ "$HAS_KEYSTORE" = "true" ] && [ "$HAS_KEYSTORE_PASSWORD" = "true" ] && [ "$HAS_KEY_ALIAS" = "true" ] && [ "$HAS_KEY_PASSWORD" = "true" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "All required Android release signing secrets are configured."
+          elif [ "$HAS_KEYSTORE" = "true" ] || [ "$HAS_KEYSTORE_PASSWORD" = "true" ] || [ "$HAS_KEY_ALIAS" = "true" ] || [ "$HAS_KEY_PASSWORD" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            missing=""
+            [ "$HAS_KEYSTORE" != "true" ] && missing="${missing} BUDDY_KEYSTORE_BASE64"
+            [ "$HAS_KEYSTORE_PASSWORD" != "true" ] && missing="${missing} BUDDY_KEYSTORE_PASSWORD"
+            [ "$HAS_KEY_ALIAS" != "true" ] && missing="${missing} BUDDY_KEY_ALIAS"
+            [ "$HAS_KEY_PASSWORD" != "true" ] && missing="${missing} BUDDY_KEY_PASSWORD"
+            echo "::warning::Partial Android release signing secrets detected (missing:${missing}). Skipping signed release APK build; debug APK will still be built."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Android release signing secrets are not configured. Skipping signed release APK build."
+          fi
+
+      - name: Validate Production Environment & Build Web Application
         env:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || secrets.VITE_API_BASE_URL }}
+          RELEASE_SIGNING_READY: ${{ steps.signing_check.outputs.ready }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          set -euo pipefail
           if [ -n "$VITE_API_BASE_URL" ]; then
-            echo "Embedding configured VITE_API_BASE_URL for Android APK build."
             if echo "$VITE_API_BASE_URL" | grep -qiE "ais-dev-|ais-pre-"; then
-              echo "::error::VITE_API_BASE_URL points to an authenticated AI Studio preview host ($VITE_API_BASE_URL) which rejects Android APK requests. Configure an independent public Cloud Run backend URL."
+              echo "::error::VITE_API_BASE_URL points to an authenticated AI Studio preview host which rejects Android APK requests. Configure an independent public Cloud Run HTTPS backend URL."
               exit 1
             fi
+            if ! echo "$VITE_API_BASE_URL" | grep -qE "^https://[^[:space:]@]+"; then
+              echo "::error::VITE_API_BASE_URL must be a valid public HTTPS service root URL without embedded credentials."
+              exit 1
+            fi
+            echo "Embedding validated production VITE_API_BASE_URL into web & Android assets."
           else
-            echo "::warning::VITE_API_BASE_URL is not set in repository variables/secrets. Operators must enter the backend HTTPS URL inside System > Health > Backend Server Gateway after installing the APK."
+            if [ "$RELEASE_SIGNING_READY" = "true" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "::error::VITE_API_BASE_URL is required for public release Android APK builds. Deploy the BUDDY backend and set repository variable VITE_API_BASE_URL."
+              exit 1
+            fi
+            echo "::warning::VITE_API_BASE_URL is not configured. Debug APK will report Server Unavailable for cloud Gemini (On-Device Offline AI remains functional). Signed release builds require VITE_API_BASE_URL."
           fi
+
           npm run build
-          if grep -rnE "AIza[0-9A-Za-z_-]{20,}" dist/; then
-            echo "::error::Potential Google API key detected inside built dist/ assets!"
+
+          if grep -rnE "AIza[0-9A-Za-z_-]{20,}|https?://ais-(dev|pre)-[a-z0-9]+|SURYA_API_TOKEN|VERONICA_SECRET" dist/; then
+            echo "::error::Forbidden API key, server secret, or AI Studio preview host detected in built dist/ assets!"
             exit 1
           fi
 
-      - name: Verify Capacitor Config & Copy Assets
+      - name: Copy Built Web Assets & Verify Bundle Secrecy
         run: |
+          set -euo pipefail
+          rm -rf android/app/src/main/assets/public
           mkdir -p android/app/src/main/assets/public
           cp -r dist/* android/app/src/main/assets/public/
+          if grep -rnE "AIza[0-9A-Za-z_-]{20,}|https?://ais-(dev|pre)-[a-z0-9]+|SURYA_API_TOKEN|VERONICA_SECRET" android/app/src/main/assets/public/; then
+            echo "::error::Forbidden API key, server secret, or preview URL detected in Android APK web assets!"
+            exit 1
+          fi
 
       - name: Set up Gradle 8.11.1 Wrapper
         working-directory: android
@@ -118,31 +162,7 @@ jobs:
             fi
           done
 
-      - name: Check Release Signing Secret Configuration
-        id: signing_check
-        env:
-          HAS_KEYSTORE: ${{ secrets.BUDDY_KEYSTORE_BASE64 != '' }}
-          HAS_KEYSTORE_PASSWORD: ${{ secrets.BUDDY_KEYSTORE_PASSWORD != '' }}
-          HAS_KEY_ALIAS: ${{ secrets.BUDDY_KEY_ALIAS != '' }}
-          HAS_KEY_PASSWORD: ${{ secrets.BUDDY_KEY_PASSWORD != '' }}
-        run: |
-          if [ "$HAS_KEYSTORE" = "true" ] && [ "$HAS_KEYSTORE_PASSWORD" = "true" ] && [ "$HAS_KEY_ALIAS" = "true" ] && [ "$HAS_KEY_PASSWORD" = "true" ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            echo "All required Android release signing secrets are configured."
-          elif [ "$HAS_KEYSTORE" = "true" ] || [ "$HAS_KEYSTORE_PASSWORD" = "true" ] || [ "$HAS_KEY_ALIAS" = "true" ] || [ "$HAS_KEY_PASSWORD" = "true" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            missing=""
-            [ "$HAS_KEYSTORE" != "true" ] && missing="${missing} BUDDY_KEYSTORE_BASE64"
-            [ "$HAS_KEYSTORE_PASSWORD" != "true" ] && missing="${missing} BUDDY_KEYSTORE_PASSWORD"
-            [ "$HAS_KEY_ALIAS" != "true" ] && missing="${missing} BUDDY_KEY_ALIAS"
-            [ "$HAS_KEY_PASSWORD" != "true" ] && missing="${missing} BUDDY_KEY_PASSWORD"
-            echo "::warning::Partial Android release signing secrets detected (missing:${missing}). Skipping signed release APK build; debug APK will still be built."
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Android release signing secrets are not configured. Skipping signed release APK build."
-          fi
-
-      - name: Build Signed Release APK (when all signing secrets configured)
+      - name: Build Signed Release APK & Verify Signature
         if: steps.signing_check.outputs.ready == 'true'
         working-directory: android
         env:
@@ -167,30 +187,61 @@ jobs:
 
           export BUDDY_KEYSTORE_PATH="$KEYSTORE_TMP"
           if [ -f "./gradlew" ]; then
-            ./gradlew assembleRelease --no-daemon --console=plain --stacktrace
+            ./gradlew lintRelease assembleRelease --no-daemon --console=plain --stacktrace
           else
-            gradle assembleRelease --no-daemon --console=plain --stacktrace
+            gradle lintRelease assembleRelease --no-daemon --console=plain --stacktrace
           fi
 
-      - name: Compute SHA-256 Checksum & Diagnostics
+          RELEASE_APK="$(find app/build/outputs/apk/release -name "*.apk" -type f | head -n 1)"
+          if [ -z "$RELEASE_APK" ] || [ ! -f "$RELEASE_APK" ]; then
+            echo "::error::Release APK output was not generated."
+            exit 1
+          fi
+          APKSIGNER="${ANDROID_HOME}/build-tools/36.0.0/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs "$RELEASE_APK"
+
+      - name: Package APKs & Generate SHA-256 Checksums
         run: |
-          mkdir -p release-apk
-          find android/app/build/outputs/apk/ -name "*.apk" -type f | sort | while read -r apk; do
-            echo "Found APK: $apk"
-            sha256sum "$apk" > "${apk}.sha256"
-            cp "$apk" release-apk/Surya-Android.apk
-            sha256sum release-apk/Surya-Android.apk > release-apk/Surya-Android.apk.sha256
-            cat release-apk/Surya-Android.apk.sha256
+          set -euo pipefail
+          mkdir -p artifacts/debug artifacts/release
+
+          find android/app/build/outputs/apk/debug -name "*.apk" -type f | sort | while read -r apk; do
+            echo "Found Debug APK: $apk"
+            cp "$apk" artifacts/debug/BUDDY-Android-debug.apk
+            (cd artifacts/debug && sha256sum BUDDY-Android-debug.apk > BUDDY-Android-debug.apk.sha256)
+            cat artifacts/debug/BUDDY-Android-debug.apk.sha256
           done
 
-      - name: Upload SURYA Android APK Artifact
+          if [ "${{ steps.signing_check.outputs.ready }}" = "true" ]; then
+            find android/app/build/outputs/apk/release -name "*.apk" -type f | sort | while read -r apk; do
+              echo "Found Signed Release APK: $apk"
+              cp "$apk" artifacts/release/Surya-Android.apk
+              (cd artifacts/release && sha256sum Surya-Android.apk > Surya-Android.apk.sha256)
+              cat artifacts/release/Surya-Android.apk.sha256
+            done
+          fi
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BUDDY-Debug-APK
+          path: artifacts/debug/*
+          if-no-files-found: warn
+
+      - name: Upload Signed Release APK Artifact
+        if: steps.signing_check.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: Surya-Android.apk
+          path: artifacts/release/*
+          if-no-files-found: error
+
+      - name: Upload Android Lint & Build Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BUDDY-Android-Reports
           path: |
-            release-apk/*
-            android/app/build/outputs/apk/debug/*.apk
-            android/app/build/outputs/apk/debug/*.sha256
-            android/app/build/outputs/apk/release/*.apk
-            android/app/build/outputs/apk/release/*.sha256
-          if-no-files-found: warn
+            android/app/build/reports/lint-results-*.txt
+            android/app/build/reports/lint-results-*.html
+          if-no-files-found: ignore

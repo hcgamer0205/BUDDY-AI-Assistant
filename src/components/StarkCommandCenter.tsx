@@ -18,6 +18,7 @@ import {
   Radio,
 } from 'lucide-react';
 import { ChatMessage, ResponseMode, StarkActionPlan } from '../types/surya';
+import { apiService, ConnectionStatusSnapshot } from '../services/apiService';
 import { intelligenceRouter } from '../services/intelligenceRouter';
 import { liveApiService, LiveSessionState } from '../services/liveApiService';
 import { voiceService } from '../services/voiceService';
@@ -66,6 +67,9 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
   const [voiceState, setVoiceState] = useState(voiceService.getState());
   const [liveState, setLiveState] = useState<LiveSessionState>(() => liveApiService.getState());
   const [routerStatus, setRouterStatus] = useState(() => intelligenceRouter.getEffectiveStatus());
+  const [connStatus, setConnStatus] = useState<ConnectionStatusSnapshot>(() =>
+    apiService.getConnectionStatus()
+  );
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -74,11 +78,13 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
     const unsubVoice = voiceService.subscribe(setVoiceState);
     const unsubLive = liveApiService.subscribe(setLiveState);
     const unsubRouter = intelligenceRouter.subscribe(setRouterStatus);
+    const unsubConn = apiService.subscribeConnectionState(setConnStatus);
     return () => {
       unsubTheme();
       unsubVoice();
       unsubLive();
       unsubRouter();
+      unsubConn();
     };
   }, []);
 
@@ -152,11 +158,19 @@ export const StarkCommandCenter: React.FC<StarkCommandCenterProps> = ({
           <p className="text-xs text-emerald-300/80 truncate">
             {isOfflineMode
               ? routerStatus.localReady
-                ? `Offline AI · ${routerStatus.activeLocalModelName}`
+                ? `Offline Ready · ${routerStatus.activeLocalModelName}`
                 : 'Offline Mode · Local tools active (no local model installed)'
               : routerStatus.activePath === 'on-device-llm'
-              ? `On-Device · ${routerStatus.activeLocalModelName}`
-              : `Server Gemini · ${activeModel}`}
+              ? `Offline Ready · ${routerStatus.activeLocalModelName}`
+              : !routerStatus.networkOnline
+              ? routerStatus.localReady
+                ? `Offline Ready · ${routerStatus.activeLocalModelName}`
+                : 'Server Unavailable · Network offline'
+              : connStatus.state === 'CONNECTING'
+              ? `Connecting · ${activeModel}`
+              : connStatus.state === 'CONNECTED' && connStatus.geminiConfigured === true
+              ? `Gemini Ready · ${activeModel}`
+              : 'Server Unavailable'}
           </p>
         </div>
 

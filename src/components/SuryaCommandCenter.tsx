@@ -16,7 +16,6 @@ interface SuryaCommandCenterProps {
   onSendQuickCommand: (text: string) => void;
   onNavigateTab: (tab: TabType) => void;
   onOpenGeminiSettings?: () => void;
-  onOpenBackendSettings?: () => void;
   onOpenVoiceModal: () => void;
   onOpenThemeModal: () => void;
   onOpenProductivityModal: (initialTab?: 'tasks' | 'notes' | 'focus' | 'vault' | 'automations') => void;
