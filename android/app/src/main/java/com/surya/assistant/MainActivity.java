@@ -124,11 +124,7 @@ public class MainActivity extends BridgeActivity {
         };
 
         IntentFilter filter = new IntentFilter(SuryaHandsFreeService.BROADCAST_HANDSFREE_STOPPED);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(handsFreeStopReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(handsFreeStopReceiver, filter);
-        }
+        ContextCompat.registerReceiver(this, handsFreeStopReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
 
         handleDeepLinkIntent(getIntent());
     }
@@ -302,7 +298,7 @@ public class MainActivity extends BridgeActivity {
                         int type = dev.getType();
                         if (type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
                             type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-                            type == AudioDeviceInfo.TYPE_BLE_HEADSET) {
+                            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && type == AudioDeviceInfo.TYPE_BLE_HEADSET)) {
                             bluetoothAudio = true;
                             break;
                         }

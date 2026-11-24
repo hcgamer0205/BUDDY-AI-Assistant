@@ -354,6 +354,21 @@ test('12. Native Android Foreground Service, Widget & App Shortcuts Verification
   assert.ok(mainActivity.includes('getDeviceTelemetry'), 'MainActivity must expose getDeviceTelemetry bridge');
   assert.ok(mainActivity.includes('startHandsFreeForegroundService'), 'MainActivity must expose Foreground Service start');
   assert.ok(mainActivity.includes('JSONObject.quote'), 'MainActivity must safely escape strings sent to JS');
+  assert.ok(
+    mainActivity.includes('ContextCompat.registerReceiver(') && mainActivity.includes('ContextCompat.RECEIVER_NOT_EXPORTED'),
+    'MainActivity must use ContextCompat.registerReceiver with RECEIVER_NOT_EXPORTED to satisfy Android Lint UnspecifiedRegisterReceiverFlag'
+  );
+  assert.doesNotMatch(
+    mainActivity,
+    /registerReceiver\s*\(\s*handsFreeStopReceiver\s*,\s*filter\s*\)\s*;/,
+    'MainActivity must not call 2-arg registerReceiver without export flag'
+  );
+
+  const offlineSvc = fs.readFileSync(
+    path.resolve('android/app/src/main/java/com/surya/assistant/SuryaOfflineModelService.java'),
+    'utf-8'
+  );
+  assert.ok(!offlineSvc.includes('Set.of('), 'SuryaOfflineModelService must avoid API 30 Set.of for minSdk 26 compatibility');
 });
 
 // 13. Android & Web URL Resolution, Normalization, and Validation

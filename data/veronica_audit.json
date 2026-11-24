@@ -1,5 +1,15 @@
 [
   {
+    "id": "audit_1795511831658",
+    "namespace": "03872f3814dd133275c61935",
+    "timestamp": "2026-11-24T09:17:11.658Z",
+    "action": "Security Auth Granted: app_settings",
+    "riskLevel": "MEDIUM",
+    "status": "AUTHORIZED",
+    "details": "Authorized via DEVICE_SECURITY_PIN_VALIDATION. Token issued.",
+    "actor": "SURYA_SECURITY"
+  },
+  {
     "id": "audit_1795447500407",
     "namespace": "03872f3814dd133275c61935",
     "timestamp": "2026-11-23T15:25:00.407Z",

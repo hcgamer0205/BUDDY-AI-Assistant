@@ -35,6 +35,8 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -58,7 +60,7 @@ public class SuryaOfflineModelService {
         void emit(String eventName, String jsonPayload);
     }
 
-    private static final Set<String> TRUSTED_HOSTS = Set.of(
+    private static final Set<String> TRUSTED_HOSTS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
         "huggingface.co",
         "hf.co",
         "cdn-lfs.huggingface.co",
@@ -66,7 +68,7 @@ public class SuryaOfflineModelService {
         "cdn-lfs-eu-1.huggingface.co",
         "storage.googleapis.com",
         "dl.google.com"
-    );
+    )));
 
     private static final class DownloadControl {
         final AtomicBoolean paused = new AtomicBoolean(false);

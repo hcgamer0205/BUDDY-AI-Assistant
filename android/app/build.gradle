@@ -22,11 +22,13 @@ android {
         targetCompatibility JavaVersion.VERSION_21
     }
 
+    def releaseKeystorePath = System.getenv("BUDDY_KEYSTORE_PATH")
+    def hasReleaseKeystore = releaseKeystorePath != null && !releaseKeystorePath.trim().isEmpty()
+
     signingConfigs {
-        release {
-            def ksPath = System.getenv("BUDDY_KEYSTORE_PATH")
-            if (ksPath != null && !ksPath.trim().isEmpty()) {
-                storeFile file(ksPath)
+        if (hasReleaseKeystore) {
+            release {
+                storeFile file(releaseKeystorePath)
                 storePassword System.getenv("BUDDY_KEYSTORE_PASSWORD") ?: ""
                 keyAlias System.getenv("BUDDY_KEY_ALIAS") ?: ""
                 keyPassword System.getenv("BUDDY_KEY_PASSWORD") ?: (System.getenv("BUDDY_KEYSTORE_PASSWORD") ?: "")
@@ -38,7 +40,7 @@ android {
         release {
             minifyEnabled true
             shrinkResources true
-            if (System.getenv("BUDDY_KEYSTORE_PATH")) {
+            if (hasReleaseKeystore) {
                 signingConfig signingConfigs.release
             }
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -46,6 +48,10 @@ android {
         debug {
             debuggable true
         }
+    }
+
+    lint {
+        textReport true
     }
 }
 
